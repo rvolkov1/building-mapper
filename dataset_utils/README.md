@@ -135,15 +135,16 @@ python organize_multi_pano_rooms.py --dataset_path /path/to/dataset --output_dir
 
 ## Extract 2D Views (`extract_2d_views.py`)
 
-This script extracts 2D perspective views from panoramic images in the ZInD dataset. For each room, it generates pairs of views from two different panoramas, with both cameras looking at common points in the room.
+This script extracts 2D perspective views from panoramic images in the ZInD dataset. For each room, it generates correspondence sets from all available panoramas, with all cameras looking at common points in the room.
 
 ### Features
 
 - Extracts perspective views from equirectangular panoramas
+- Handles multiple panoramas per room (not just pairs)
 - Uses room geometry (when available) to generate meaningful viewpoints
 - Automatically adjusts field of view based on camera distances
-- Generates multiple view pairs per room with cameras looking at common points
-- Saves detailed metadata for each view pair
+- Generates multiple correspondence sets per room with all cameras looking at common points
+- Saves detailed metadata for each correspondence set
 
 ### Prerequisites
 
@@ -158,7 +159,8 @@ zind_subset/
 ├── scene_id/
 │   ├── panos/
 │   │   ├── room_01_pano_0.jpg
-│   │   └── room_01_pano_1.jpg
+│   │   ├── room_01_pano_1.jpg
+│   │   └── room_01_pano_2.jpg  # Can handle any number of panoramas
 │   └── zind_data.json
 ```
 
@@ -169,11 +171,12 @@ zind_subset/
 ├── scene_id/
 │   ├── 2d_views/
 │   │   └── room 01/
-│   │       ├── pair_0/
-│   │       │   ├── view1.jpg
-│   │       │   ├── view2.jpg
-│   │       │   └── target_info.txt
-│   │       └── pair_1/
+│   │       ├── corres_0/
+│   │       │   ├── view_0.jpg
+│   │       │   ├── view_1.jpg
+│   │       │   ├── view_2.jpg  # One view per panorama
+│   │       │   └── correspondence_info.txt
+│   │       └── corres_1/
 │   │           └── ...
 ```
 
@@ -186,7 +189,7 @@ python extract_2d_views.py [options]
 #### Options
 
 - `--base_dir`: Root directory containing scene folders (default: 'zind_subset')
-- `--num_pairs`: Number of view pairs to generate per room (default: 10)
+- `--num_corres`: Number of correspondence sets to generate per room (default: 10)
 - `--width`: Width of output perspective views (default: 512)
 - `--height`: Height of output perspective views (default: 512)
 - `--base_fov`: Base field of view in degrees (default: 90)
@@ -202,16 +205,20 @@ python extract_2d_views.py
 
 Process a specific scene with custom parameters:
 ```bash
-python extract_2d_views.py --scene 0035 --num_pairs 15 --width 1024 --height 1024 --base_fov 80
+python extract_2d_views.py --scene 0035 --num_corres 15 --width 1024 --height 1024 --base_fov 80
 ```
 
 ### Output Files
 
-For each pair of views, the script generates:
+For each correspondence set, the script generates:
 
-1. `view1.jpg` and `view2.jpg`: The extracted perspective views
-2. `target_info.txt`: Metadata file containing:
+1. `view_N.jpg`: The extracted perspective views (one for each panorama)
+2. `correspondence_info.txt`: Metadata file containing:
    - Target point coordinates
-   - Camera positions and rotations
-   - Yaw angles for both views
-   - Field of view used 
+   - Field of view used
+   - Total number of views in the correspondence set
+   - For each view:
+     - Camera position
+     - Camera rotation
+     - Yaw angle
+     - Distance to target point 

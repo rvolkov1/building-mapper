@@ -1,13 +1,9 @@
-import cv2
-import random
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
 import os
 import re
+import cv2
 import json
-import math
 import argparse
+import numpy as np
 
 def equirectangular_to_perspective(pano, fov=90, theta=0, phi=0, width=512, height=512):
     """
@@ -273,8 +269,8 @@ def main():
     parser = argparse.ArgumentParser(description='Extract 2D perspective views from panoramic images.')
     parser.add_argument('--base_dir', type=str, default='zind_subset',
                       help='Root directory containing scene folders (default: zind_subset)')
-    parser.add_argument('--num_pairs', type=int, default=10,
-                      help='Number of view pairs to generate per room (default: 10)')
+    parser.add_argument('--num_corres', type=int, default=10,
+                      help='Number of correspondence sets to generate per room (default: 10)')
     parser.add_argument('--width', type=int, default=512,
                       help='Width of output perspective views (default: 512)')
     parser.add_argument('--height', type=int, default=512,
@@ -319,31 +315,44 @@ def main():
                 print(f"Skipping room {room_id} in scene {scene}: fewer than 2 panoramas")
                 continue
                 
-            # Sort and select first two panoramas
+            # Sort panoramas for consistency
             pano_files.sort()
-            pano1_file = pano_files[0]
-            pano2_file = pano_files[1]
-            pano1_path = os.path.join(pano_dir, pano1_file)
-            pano2_path = os.path.join(pano_dir, pano2_file)
-
-            # Get camera data (or use default if not found)
-            camera1_data = camera_data.get(pano1_file, {"rotation": 0, "translation": [0, 0, 0], "room_id": room_id})
-            camera2_data = camera_data.get(pano2_file, {"rotation": 0, "translation": [0, 0, 0], "room_id": room_id})
             
-            rotation1 = camera1_data.get("rotation", 0)
-            rotation2 = camera2_data.get("rotation", 0)
-            translation1 = camera1_data.get("translation", [0, 0, 0])
-            translation2 = camera2_data.get("translation", [0, 0, 0])
+            print(f"Processing room {room_id} in scene {scene} with {len(pano_files)} panoramas")
             
-            # Calculate distance between cameras (for FOV adjustment and logging)
-            pos1 = np.array(translation1[:2])
-            pos2 = np.array(translation2[:2])
-            distance = np.linalg.norm(pos2 - pos1)
+            # Load all panoramas and their metadata
+            panos = []
+            camera_positions = []
+            camera_rotations = []
+            camera_translations = []
             
-            print(f"Cameras for room {room_id} in scene {scene}: "
-                  f"rot: {rotation1:.2f}° and {rotation2:.2f}°, "
-                  f"distance: {distance:.2f}m")
-
+            for pano_file in pano_files:
+                pano_path = os.path.join(pano_dir, pano_file)
+                pano = cv2.imread(pano_path)
+                if pano is None:
+                    print(f"Error loading panorama: {pano_path}")
+                    continue
+                pano = cv2.cvtColor(pano, cv2.COLOR_BGR2RGB)
+                
+                # Get camera data
+                camera_info = camera_data.get(pano_file, {
+                    "rotation": 0,
+                    "translation": [0, 0, 0],
+                    "room_id": room_id
+                })
+                
+                rotation = camera_info.get("rotation", 0)
+                translation = camera_info.get("translation", [0, 0, 0])
+                
+                panos.append(pano)
+                camera_positions.append(np.array(translation[:2]))
+                camera_rotations.append(rotation)
+                camera_translations.append(translation)
+            
+            if len(panos) < 2:
+                print(f"Skipping room {room_id} in scene {scene}: not enough valid panoramas")
+                continue
+            
             # Generate room points to look at
             room_points = []
             
@@ -352,82 +361,99 @@ def main():
             
             if vertices:
                 # Generate room points based on room geometry
-                room_points = generate_room_points(vertices, args.num_pairs)
+                room_points = generate_room_points(vertices, args.num_corres)
                 print(f"Generated {len(room_points)} points from room vertices")
             
             # If no vertices or point generation failed, create a fallback grid of points
             if not room_points:
                 print(f"No room vertices found for room {room_id}, generating surrogate points")
                 
-                # Calculate midpoint between cameras as reference
-                midpoint = (pos1 + pos2) / 2
+                # Calculate centroid of all camera positions
+                centroid = np.mean(camera_positions, axis=0)
                 
-                # Create a circular arrangement of points around the midpoint
-                radius = max(2.0, distance * 2)  # Ensure points are reasonably distant
-                angles = np.linspace(0, 2*np.pi, args.num_pairs, endpoint=False)
+                # Find maximum distance from centroid to any camera
+                max_dist = max(np.linalg.norm(pos - centroid) for pos in camera_positions)
+                radius = max(2.0, max_dist * 2)  # Ensure points are reasonably distant
+                
+                # Create a circular arrangement of points around the centroid
+                angles = np.linspace(0, 2*np.pi, args.num_corres, endpoint=False)
                 
                 room_points = []
                 for angle in angles:
-                    x = midpoint[0] + radius * np.cos(angle)
-                    y = midpoint[1] + radius * np.sin(angle)
+                    x = centroid[0] + radius * np.cos(angle)
+                    y = centroid[1] + radius * np.sin(angle)
                     room_points.append([x, y])
-
-            # Load panoramas
-            pano1 = cv2.imread(pano1_path)
-            pano2 = cv2.imread(pano2_path)
-            if pano1 is None or pano2 is None:
-                print(f"Error loading panoramas: {pano1_path} or {pano2_path}")
-                continue
-            pano1 = cv2.cvtColor(pano1, cv2.COLOR_BGR2RGB)
-            pano2 = cv2.cvtColor(pano2, cv2.COLOR_BGR2RGB)
 
             # Create output directory (e.g., "room 01")
             output_dir = os.path.join(scene_dir, "2d_views", f"room {room_id}")
             os.makedirs(output_dir, exist_ok=True)
 
-            # Extract pairs with both cameras looking at the same room point
-            for i, target_point in enumerate(room_points[:args.num_pairs]):
-                # Calculate yaw angles for cameras to look at the target point
-                yaw1 = calculate_camera_angle_to_point(translation1, target_point, rotation1)
-                yaw2 = calculate_camera_angle_to_point(translation2, target_point, rotation2)
+            # Extract views with all cameras looking at the same room point
+            for i, target_point in enumerate(room_points[:args.num_corres]):
+                # Create directory for this correspondence set
+                corres_dir = os.path.join(output_dir, f"corres_{i}")
+                os.makedirs(corres_dir, exist_ok=True)
                 
-                # Calculate distance from each camera to the target point
-                dist1 = np.linalg.norm(np.array(target_point) - np.array(translation1[:2]))
-                dist2 = np.linalg.norm(np.array(target_point) - np.array(translation2[:2]))
+                # Calculate distance from each camera to the target point and yaw angles
+                yaw_angles = []
+                distances = []
                 
-                # Adjust field of view based on distance to the target
-                # Closer points need wider FOV, farther points need narrower FOV
-                if max(dist1, dist2) > 2.0:
+                for idx, (pos, rot) in enumerate(zip(camera_translations, camera_rotations)):
+                    # Calculate yaw angle to look at the target point
+                    yaw = calculate_camera_angle_to_point(pos, target_point, rot)
+                    yaw_angles.append(yaw)
+                    
+                    # Calculate distance from camera to target
+                    dist = np.linalg.norm(np.array(target_point) - np.array(pos[:2]))
+                    distances.append(dist)
+                
+                # Determine FOV based on maximum distance
+                max_dist = max(distances)
+                if max_dist > 2.0:
                     # For distant targets, reduce FOV to zoom in
-                    fov_factor = min(1.0, 2.0 / max(dist1, dist2))
+                    fov_factor = min(1.0, 2.0 / max_dist)
                     fov = max(args.min_fov, args.base_fov * fov_factor)
                 else:
                     fov = args.base_fov
                 
-                # Create directory for this pair
-                pair_dir = os.path.join(output_dir, f"pair_{i}")
-                os.makedirs(pair_dir, exist_ok=True)
-
-                # Extract views with cameras looking at the target point
-                view1 = equirectangular_to_perspective(pano1, fov=fov, theta=yaw1, phi=0, 
-                                                     width=args.width, height=args.height)
-                view2 = equirectangular_to_perspective(pano2, fov=fov, theta=yaw2, phi=0, 
-                                                     width=args.width, height=args.height)
-
-                # Save the pair
-                cv2.imwrite(os.path.join(pair_dir, "view1.jpg"), cv2.cvtColor(view1, cv2.COLOR_RGB2BGR))
-                cv2.imwrite(os.path.join(pair_dir, "view2.jpg"), cv2.cvtColor(view2, cv2.COLOR_RGB2BGR))
+                # Extract and save views for all panoramas
+                views_info = []
+                for idx, (pano, pos, rot, yaw, dist) in enumerate(zip(
+                    panos, camera_positions, camera_rotations, yaw_angles, distances
+                )):
+                    # Extract perspective view
+                    view = equirectangular_to_perspective(
+                        pano, fov=fov, theta=yaw, phi=0,
+                        width=args.width, height=args.height
+                    )
+                    
+                    # Save the view
+                    view_path = os.path.join(corres_dir, f"view_{idx}.jpg")
+                    cv2.imwrite(view_path, cv2.cvtColor(view, cv2.COLOR_RGB2BGR))
+                    
+                    # Store view info for metadata
+                    views_info.append({
+                        "camera_position": [float(pos[0]), float(pos[1])],
+                        "camera_rotation": float(rot),
+                        "yaw_angle": float(yaw),
+                        "distance": float(dist)
+                    })
                 
-                # Save target point coordinates for reference
-                with open(os.path.join(pair_dir, "target_info.txt"), "w") as f:
+                # Save correspondence info
+                with open(os.path.join(corres_dir, "correspondence_info.txt"), "w") as f:
                     f.write(f"Target point: [{target_point[0]:.2f}, {target_point[1]:.2f}]\n")
-                    f.write(f"Camera 1 position: [{translation1[0]:.2f}, {translation1[1]:.2f}], rotation: {rotation1:.2f}°\n")
-                    f.write(f"Camera 2 position: [{translation2[0]:.2f}, {translation2[1]:.2f}], rotation: {rotation2:.2f}°\n")
-                    f.write(f"Yaw angles: {yaw1:.2f}° and {yaw2:.2f}°\n")
-                    f.write(f"FOV: {fov:.1f}°\n")
+                    f.write(f"Field of view: {fov:.1f}°\n\n")
+                    f.write(f"Total views: {len(views_info)}\n\n")
+                    
+                    for idx, info in enumerate(views_info):
+                        f.write(f"View {idx}:\n")
+                        f.write(f"  Camera position: [{info['camera_position'][0]:.2f}, {info['camera_position'][1]:.2f}]\n")
+                        f.write(f"  Camera rotation: {info['camera_rotation']:.2f}°\n")
+                        f.write(f"  Yaw angle: {info['yaw_angle']:.2f}°\n")
+                        f.write(f"  Distance to target: {info['distance']:.2f}m\n\n")
                 
-                print(f"Saved pair_{i} for room {room_id} in scene {scene} with "
-                      f"yaw1={yaw1:.1f}°, yaw2={yaw2:.1f}° and FOV={fov:.1f}°")
+                print(f"Saved correspondence set {i} for room {room_id} in scene {scene}: "
+                      f"{len(panos)} views, FOV={fov:.1f}°")
 
 if __name__ == "__main__":
     main()
