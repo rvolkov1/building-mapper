@@ -131,4 +131,87 @@ python organize_multi_pano_rooms.py --dataset_path /path/to/dataset --output_dir
 - Floors where not all rooms have multiple panoramas are completely excluded from the output
 - The `panos` directory in each scene contains only panorama images from floors where all rooms have multiple panoramas
 - Each scene retains its complete floor plans and metadata information
-- Both scripts support quiet mode for automated processing 
+- Both scripts support quiet mode for automated processing
+
+## Extract 2D Views (`extract_2d_views.py`)
+
+This script extracts 2D perspective views from panoramic images in the ZInD dataset. For each room, it generates pairs of views from two different panoramas, with both cameras looking at common points in the room.
+
+### Features
+
+- Extracts perspective views from equirectangular panoramas
+- Uses room geometry (when available) to generate meaningful viewpoints
+- Automatically adjusts field of view based on camera distances
+- Generates multiple view pairs per room with cameras looking at common points
+- Saves detailed metadata for each view pair
+
+### Prerequisites
+
+```bash
+pip install numpy opencv-python matplotlib scikit-learn
+```
+
+### Input Directory Structure
+
+```
+zind_subset/
+├── scene_id/
+│   ├── panos/
+│   │   ├── room_01_pano_0.jpg
+│   │   └── room_01_pano_1.jpg
+│   └── zind_data.json
+```
+
+### Output Directory Structure
+
+```
+zind_subset/
+├── scene_id/
+│   ├── 2d_views/
+│   │   └── room 01/
+│   │       ├── pair_0/
+│   │       │   ├── view1.jpg
+│   │       │   ├── view2.jpg
+│   │       │   └── target_info.txt
+│   │       └── pair_1/
+│   │           └── ...
+```
+
+### Usage
+
+```bash
+python extract_2d_views.py [options]
+```
+
+#### Options
+
+- `--base_dir`: Root directory containing scene folders (default: 'zind_subset')
+- `--num_pairs`: Number of view pairs to generate per room (default: 10)
+- `--width`: Width of output perspective views (default: 512)
+- `--height`: Height of output perspective views (default: 512)
+- `--base_fov`: Base field of view in degrees (default: 90)
+- `--min_fov`: Minimum field of view in degrees (default: 60)
+- `--scene`: Process specific scene (optional)
+
+#### Examples
+
+Process all scenes with default settings:
+```bash
+python extract_2d_views.py
+```
+
+Process a specific scene with custom parameters:
+```bash
+python extract_2d_views.py --scene 0035 --num_pairs 15 --width 1024 --height 1024 --base_fov 80
+```
+
+### Output Files
+
+For each pair of views, the script generates:
+
+1. `view1.jpg` and `view2.jpg`: The extracted perspective views
+2. `target_info.txt`: Metadata file containing:
+   - Target point coordinates
+   - Camera positions and rotations
+   - Yaw angles for both views
+   - Field of view used 
