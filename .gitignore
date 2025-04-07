@@ -1,0 +1,8 @@
+.DS_Store
+.vscode/
+__pycache__/
+zind/
+zind_subset/
+dataset/
+_360LayoutVisualizer_
+0000
