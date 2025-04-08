@@ -135,7 +135,7 @@ def apply_transform(pts, H):
   return points
 
 
-def compute_affine_RANSAC(correspondence, iters=1000):
+def compute_affine_RANSAC(correspondence, ransac_thr, iters=1000):
     A = None
     src_points, dst_points = correspondence
     A_best = np.inf
@@ -156,7 +156,7 @@ def compute_affine_RANSAC(correspondence, iters=1000):
       # calculcate how many points fit are inliers
       err = np.linalg.norm(out_pts - dst_points, axis=1)
 
-      num_err = np.sum(err > 2.0)
+      num_err = np.sum(err > ransac_thr)
 
       # if model is better than best model, replace best model with current model
       if (num_err < A_best):
@@ -165,14 +165,14 @@ def compute_affine_RANSAC(correspondence, iters=1000):
 
     return A
 
-def compute_A(x1, x2):
+def compute_A(x1, x2, ransac_thr):
   # Computes the affine transformation matrix between two sets of points using RANSAC.
   # Input:
   #    x1 (Nx2 ndarray): Keypoints from the first image.
   #    x2 (Nx2 ndarray): Keypoints from the second image.
   # Output:
   #    A (3x3 ndarray): Affine transformation matrix.
-  return compute_affine_RANSAC((x1, x2))
+  return compute_affine_RANSAC((x1, x2), ransac_thr)
 
 def my_bilinear_interpolate(img, points):
   H, W, C = img.shape
@@ -294,3 +294,136 @@ def visualize_warp_image(img_warped, img, filename=None):
     plt.clf()
   else:
     plt.show()
+
+def normalize_pts(pts):
+  mean = np.mean(pts, axis=0)
+  std = np.std(pts, axis=0)
+
+  std = np.sqrt(2) / std
+
+  norm_mat = np.array([
+    [std[0], 0, -mean[0] * std[0]],
+    [0, std[1], -mean[1] * std[1]],
+    [0, 0, 1]
+  ])
+
+  homo_pts = np.column_stack([pts, np.ones(pts.shape[0])])
+
+  norm_pts = (norm_mat @ homo_pts.T).T
+
+  return norm_pts[:, :2], norm_mat
+
+def compute_F_eight(correspondence):
+  src_pts, dst_pts = correspondence
+
+  src_norm, src_T = normalize_pts(src_pts)
+  dst_norm, dst_T = normalize_pts(dst_pts)
+
+  ux = src_norm[:, 0]; uy  = src_norm[:, 1]
+  vx = dst_norm[:, 0]; vy = dst_norm[:, 1]
+
+  Y = np.column_stack([ vx * ux, vx * uy, vx, vy * ux, vy * uy, vy, ux, uy, np.ones(ux.shape)])
+
+  U, S, Vh = np.linalg.svd(Y, full_matrices=False)
+  F = Vh[-1].reshape((3, 3))
+
+  Uf, Sf, Vf = np.linalg.svd(F)
+  Sf[-1] = 0 # enforce rank 2 constraint
+  F = Uf @ np.diag(Sf) @ Vf
+
+  F = dst_T.T @ F @ src_T
+
+  return F
+
+def compute_F(correspondence, max_iter=5000, eps=1e-3):
+  """
+  Compute the fundamental matrix using RANSAC for robust estimation.
+
+  Args:
+  - correspondence (tuple): Two np.ndarrays (pts1, pts2), each of shape (N, 2).
+  - max_iter (int): Maximum number of RANSAC iterations.
+  - eps (float): Threshold for determining inliers.
+  
+  Returns:
+  - best_F (np.ndarray): Estimated fundamental matrix of shape (3, 3).
+  """
+  src_pts, dst_pts = correspondence
+  F_best = float('inf')
+  F = None
+
+  eps = 0.5
+
+  N, _ = src_pts.shape
+  pad = np.ones((N, 1))
+  src_pad = np.hstack([src_pts, pad])
+  dst_pad = np.hstack([dst_pts, pad])
+
+  for i in range(max_iter):
+    idx = np.random.choice(N, 8, replace=False)
+
+    F_curr = compute_F_eight((src_pts[idx], dst_pts[idx]))
+
+    l2 = F_curr @ src_pad.T
+    l1 = F_curr.T @ dst_pad.T 
+
+    d1 = np.abs(np.sum(src_pad * l1.T, axis=1)) / np.linalg.norm(l1[:2, :], axis=0)
+    d2 = np.abs(np.sum(dst_pad * l2.T, axis=1)) / np.linalg.norm(l2[:2, :], axis=0)
+    err = np.sum((d1 > eps) | (d2 > eps))
+
+
+    if (err < F_best):
+      #print(err, "of:", d1.shape[0])
+      F = F_curr
+      F_best = err
+
+  return F
+
+def make_image_pair(imgs):
+    for img in imgs:
+        assert imgs[0].shape[0] == img.shape[0]
+        assert imgs[0].ndim == img.ndim
+    
+    img = np.hstack(imgs)
+    
+    if img.ndim == 3:
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    
+    return img
+
+def find_epipolar_line_end_points(img, F, p):
+    img_width = img.shape[1]
+    el = (F @ np.array([[p[0], p[1], 1]]).T).flatten()
+    p1, p2 = (0, int(-el[2] / el[1])), (img.shape[1], int((-img_width * el[0] - el[2]) / el[1]))
+    _, p1, p2 = cv2.clipLine((0, 0, img.shape[1], img.shape[0]), p1, p2)
+    return p1, p2
+
+
+def visualize_epipolar_lines(img1, img2, correspondence, F, filename=None):
+    plt.figure(figsize=(20, 10))
+    plt.imshow(make_image_pair((img1, img2)), cmap='gray')
+    
+    pts1, pts2 = correspondence
+    assert pts1.shape == pts2.shape, 'x1 and x2 should have same shape!'
+
+    cmap = plt.get_cmap('tab10')  # You can choose another colormap if you like
+    colors = [cmap(i % 10) for i in range(pts1.shape[0])]
+
+    for i in range(pts1.shape[0]):
+        x1, y1 = int(pts1[i][0] + 0.5), int(pts1[i][1] + 0.5)
+        plt.scatter(x1, y1, s=5, color=colors[i])
+
+        p1, p2 = find_epipolar_line_end_points(img2, F, (x1, y1))
+        plt.plot([p1[0] + img1.shape[1], p2[0] + img1.shape[1]], [p1[1], p2[1]], linewidth=0.5, color=colors[i])
+    
+        x2, y2 = int(pts2[i][0] + 0.5), int(pts2[i][1] + 0.5)
+        plt.scatter(x2 + img1.shape[1], y2, s=5, color=colors[i])
+
+        p1, p2 = find_epipolar_line_end_points(img1, F.T, (x2, y2))
+        plt.plot([p1[0], p2[0]], [p1[1], p2[1]], linewidth=0.5, color=colors[i])
+
+    plt.axis('off')
+
+    if filename:
+        plt.savefig(filename, bbox_inches='tight')
+    else:
+        plt.show()

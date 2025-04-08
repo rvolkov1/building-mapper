@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import cv2
 
-from feature_matching.feature_matching_utils import load_imgs_gray, show_imgs, visualize_sift, find_match, visualize_find_match, compute_A, visualize_align_image_using_feature, compute_warped_image, visualize_warp_image
+from feature_matching.feature_matching_utils import load_imgs_gray, show_imgs, visualize_sift, find_match, visualize_find_match, compute_F, visualize_epipolar_lines
 
 def main():
   parser = argparse.ArgumentParser(description='Extract 2D perspective views from panoramic images.')
@@ -29,11 +29,10 @@ def get_3d_pt_cloud(path):
   visualize_sift(im1)
   visualize_sift(im2)
 
-  x1, x2 = find_match(im1, im2)
+
+  x1, x2 = find_match(im1, im2, dist_thr=0.8)
   visualize_find_match(im1, im2, x1, x2)
 
-  A = compute_A(x1,  x2)
-  visualize_align_image_using_feature(im1, im2, x1, x2, A, ransac_thr=2)
-
-  img_warped = compute_warped_image(im2, A, 512, 512)
-  visualize_warp_image(img_warped, im1)
+  F = compute_F((x1, x2))
+  print("F: ", F)
+  visualize_epipolar_lines(im2, im2, (x1, x2), F)
