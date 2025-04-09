@@ -61,11 +61,46 @@ def FitLine_ransac(pts, thr_d=0.8, maxIter=10000):
 
     return lBest, numInliersBest
         
+def GapCheck(l, pts, thr_d=0.8):
+    # Check for how the inliers are distributed along the line l
+    d = CalculateDistFromLine(l, pts)
+    inlierSelection = (np.abs(d) <= thr_d).flatten()
+    ptsInliers = pts[inlierSelection, :]
+    lineAngle = np.atan2(l[1], l[0])
+    rotationAngle = lineAngle - np.pi/2
+    ct = np.cos(rotationAngle)
+    st = np.sin(rotationAngle)
+    R = np.array([[ct, st, 0], [-st, ct, 0], [0, 0, 1]])
+    ptsRotated = (R[0:2, 0:2] @ ptsInliers.T).T
+    lRotated = R @ l
+
+    # Calculate the moment of inertia
+    Ixx = np.sum(ptsRotated[:, 1]**2)
+    Ixy = np.sum(ptsRotated[:, 0]*ptsRotated[:, 1])
+    momentText = f"Ixx = {Ixx}, Ixy = {Ixy}"
+
+    xFit = np.array([np.min(ptsInliers[:, 0]), np.max(ptsInliers[:, 0])])
+    yFit = -(l[0]*xFit + l[2])/l[1]
+    xFitRotated = np.array([np.min(ptsRotated[:, 0]), np.max(ptsRotated[:, 0])])
+    yFitRotated = -(lRotated[0]*xFitRotated + lRotated[2])/lRotated[1]
+    fig, ax = plt.subplots(1, 3)
+    ax[0].scatter(pts[:, 0], pts[:, 1], c="r")
+    ax[0].scatter(ptsInliers[:, 0], ptsInliers[:, 1], c="g")
+    ax[0].plot(xFit, yFit, c="g", ls="-")
+    ax[1].scatter(ptsRotated[:, 0], ptsRotated[:, 1], c="g")
+    ax[1].plot(xFitRotated, yFitRotated, c='g', ls='-')
+    ax[2].hist(ptsRotated[:, 0])
+    ax[0].text(1, 1, momentText)
+
+    plt.show()
+
 
 if __name__ == "__main__":
     truthPts, noisyPts = GenerateFloorplan(N=100, sigma=0.2)
 
     lBest, dBestNorm = FitLine_ransac(noisyPts)
+
+    GapCheck(lBest, noisyPts)
 
     xFit = np.array([np.min(noisyPts[:, 0]), np.max(noisyPts[:, 0])])
     yFit = -(lBest[0]*xFit + lBest[2])/lBest[1]
