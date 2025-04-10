@@ -5,6 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 def load_imgs_gray(path, imgs):
+  print("\n", os.path.join(path, imgs[0]), "\n")
   loaded_imgs = [cv2.imread(os.path.join(path, img)) for img in imgs]
 
   #loaded_imgs = [cv2.cvtColor(img, cv2.COLOR_BGR2RGB) for img in loaded_imgs]
@@ -351,7 +352,7 @@ def compute_F(correspondence, max_iter=5000, eps=1e-3):
   F_best = float('inf')
   F = None
 
-  eps = 0.5
+  #eps = 0.5
 
   N, _ = src_pts.shape
   pad = np.ones((N, 1))
@@ -427,3 +428,73 @@ def visualize_epipolar_lines(img1, img2, correspondence, F, filename=None):
         plt.savefig(filename, bbox_inches='tight')
     else:
         plt.show()
+
+def compute_camera_pose(F, K):
+    E = K.T @ F @ K
+    R_1, R_2, t = cv2.decomposeEssentialMat(E)
+    # 4 cases
+    R1, t1 = R_1, t
+    R2, t2 = R_1, -t
+    R3, t3 = R_2, t
+    R4, t4 = R_2, -t
+
+    Rs = [R1, R2, R3, R4]
+    ts = [t1, t2, t3, t4]
+    Cs = []
+    for i in range(4):
+        Cs.append(-Rs[i].T @ ts[i])
+    return Rs, Cs
+
+def set_axes_equal(ax):
+    x_limits = ax.get_xlim3d()
+    y_limits = ax.get_ylim3d()
+    z_limits = ax.get_zlim3d()
+
+    x_range, x_middle = abs(x_limits[1] - x_limits[0]), np.mean(x_limits)
+    y_range, y_middle = abs(y_limits[1] - y_limits[0]), np.mean(y_limits)
+    z_range, z_middle = abs(z_limits[1] - z_limits[0]), np.mean(z_limits)
+
+    plot_radius = 0.5*max([x_range, y_range, z_range])
+
+    ax.set_xlim3d([x_middle - plot_radius, x_middle + plot_radius])
+    ax.set_ylim3d([y_middle - plot_radius, y_middle + plot_radius])
+    ax.set_zlim3d([z_middle - plot_radius, z_middle + plot_radius])
+
+def draw_camera(ax, R, C, scale=0.2):
+    axis_end_points = C + scale * R.T  # (3, 3)
+    vertices = C + scale * R.T @ np.array([[1, 1, 1], [-1, 1, 1], [-1, -1, 1], [1, -1, 1]]).T  # (3, 4)
+    vertices_ = np.hstack((vertices, vertices[:, :1]))  # (3, 5)
+    C = C.flatten()  # (3, 1) -> (3,)
+
+    # draw coordinate system of camera
+    ax.plot([C[0], axis_end_points[0, 0]], [C[1], axis_end_points[1, 0]], [C[2], axis_end_points[2, 0]], 'r-')
+    ax.plot([C[0], axis_end_points[0, 1]], [C[1], axis_end_points[1, 1]], [C[2], axis_end_points[2, 1]], 'g-')
+    ax.plot([C[0], axis_end_points[0, 2]], [C[1], axis_end_points[1, 2]], [C[2], axis_end_points[2, 2]], 'b-')
+
+    # draw square window and lines connecting it to camera center
+    ax.plot(vertices_[0, :], vertices_[1, :], vertices_[2, :], 'k-')
+    ax.plot([C[0], vertices[0, 0]], [C[1], vertices[1, 0]], [C[2], vertices[2, 0]], 'k-')
+    ax.plot([C[0], vertices[0, 1]], [C[1], vertices[1, 1]], [C[2], vertices[2, 1]], 'k-')
+    ax.plot([C[0], vertices[0, 2]], [C[1], vertices[1, 2]], [C[2], vertices[2, 2]], 'k-')
+    ax.plot([C[0], vertices[0, 3]], [C[1], vertices[1, 3]], [C[2], vertices[2, 3]], 'k-')
+
+
+def visualize_camera_poses(Rs, Cs):
+    assert(len(Rs) == len(Cs) == 4)
+    fig = plt.figure(figsize=(20, 10))
+    R1, C1 = np.eye(3), np.zeros((3, 1))
+    for i in range(4):
+        R2, C2 = Rs[i], Cs[i]
+        ax = fig.add_subplot(2, 2, i+1, projection='3d')
+        draw_camera(ax, R1, C1)
+        draw_camera(ax, R2, C2)
+        set_axes_equal(ax)
+        ax.set_xlabel('x axis')
+        ax.set_ylabel('y axis')
+        ax.set_zlabel('z axis')
+        ax.view_init(azim=-90, elev=0)
+        ax.title.set_text('Configuration {}'.format(i))
+    
+    fig.tight_layout()
+    plt.show()
+
