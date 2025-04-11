@@ -82,6 +82,7 @@ def analyze_all_scenes(dataset_path, verbose=True):
         1. Total number of multi-pano rooms
         2. Total number of complete multi-pano floors
         3. Number of scenes analyzed
+        4. Total number of rooms in complete multi-pano floors
     """
     # Get all scene directories (they should be numbered folders)
     scene_dirs = [d for d in os.listdir(dataset_path) if os.path.isdir(os.path.join(dataset_path, d)) and d.isdigit()]
@@ -91,6 +92,7 @@ def analyze_all_scenes(dataset_path, verbose=True):
     
     total_multi_pano_rooms = 0
     total_complete_multi_pano_floors = 0
+    total_rooms_in_multi_pano_floors = 0
     
     if verbose:
         print("\nAnalyzing all scenes in the dataset...")
@@ -129,14 +131,18 @@ def analyze_all_scenes(dataset_path, verbose=True):
                             print(f"    Room {room_id}: {len(pano_files)} panoramas")
                 
                 total_complete_multi_pano_floors += len(complete_multi_pano_floors)
+                # Count total rooms in multi-pano floors
+                for floor_rooms in complete_multi_pano_floors.values():
+                    total_rooms_in_multi_pano_floors += len(floor_rooms)
     
     if verbose:
         print("\n" + "=" * 70)
         print(f"Total number of rooms with multiple panoramas across all scenes: {total_multi_pano_rooms}")
         print(f"Total number of floors where ALL rooms have multiple panoramas: {total_complete_multi_pano_floors}")
+        print(f"Total number of rooms in complete multi-pano floors: {total_rooms_in_multi_pano_floors}")
         print(f"Number of scenes analyzed: {len(scene_dirs)}")
     
-    return total_multi_pano_rooms, total_complete_multi_pano_floors, len(scene_dirs)
+    return total_multi_pano_rooms, total_complete_multi_pano_floors, len(scene_dirs), total_rooms_in_multi_pano_floors
 
 def main():
     parser = argparse.ArgumentParser(
@@ -156,7 +162,7 @@ def main():
     
     args = parser.parse_args()
     
-    total_rooms, total_floors, total_scenes = analyze_all_scenes(
+    total_rooms, total_floors, total_scenes, total_rooms_in_multi_floors = analyze_all_scenes(
         args.dataset_path, 
         verbose=not args.quiet
     )
@@ -165,6 +171,7 @@ def main():
         print(f"Summary:")
         print(f"- Total multi-pano rooms: {total_rooms}")
         print(f"- Total complete multi-pano floors: {total_floors}")
+        print(f"- Total rooms in complete multi-pano floors: {total_rooms_in_multi_floors}")
         print(f"- Total scenes analyzed: {total_scenes}")
 
 if __name__ == "__main__":
