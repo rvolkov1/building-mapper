@@ -1,5 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy.spatial import ConvexHull
+import cv2
 
 def GenerateFloorplan(planNum, N=10, sigma=1, rngSeed=None):
     if planNum == 1:
@@ -201,8 +203,27 @@ def FindVertices(lineList, inliers, inlierRadius=1):
     return bestEndpoints
 
 
-                
 
+def MakeGrayscale(pts, scale=5):
+
+    N = pts.shape[0]
+    pts = pts*scale
+    # Generate a grid for the image
+    padding = 1*scale
+    minX = np.min(pts[:, 0]) - padding
+    maxX = np.max(pts[:, 1]) + padding
+    minY = np.min(pts[:, 1]) - padding
+    maxY = np.max(pts[:, 1]) + padding
+
+    width = int(np.ceil(maxX - minX)) + 1
+    height = int(np.ceil(maxY - minY)) + 1
+
+    img = np.zeros((height, width), dtype=np.uint8)
+    pts[:, 0] = pts[:, 0] - minX
+    pts[:, 1] = pts[:, 1] - minY
+    ptsRounded = np.round(pts).astype(int)
+    img[ptsRounded[:, 1], ptsRounded[:, 0]] = 255
+    return img
 
 
 
@@ -225,7 +246,15 @@ if __name__ == "__main__":
     # ax.set_ylim((np.min(noisyPts[:, 1]) - pad, np.max(noisyPts[:, 1]) + pad))
 
     l, cost, inliers = FitMultipleLines(noisyPts, thr_d=0.4)
-    print(l)
+    img_raw = MakeGrayscale(noisyPts)
+    img = cv2.GaussianBlur(img_raw, (9, 9), 0)
+    
+    # dst = cv2.cornerHarris(img, 2, 27, 0.04)
+    # dst = cv2.dilate(dst,None)
+    # # Threshold for an optimal value, it may vary depending on the image.
+    # img[dst>0.1*dst.max()]=255
+    # cv2.imshow('dst',img)
+
     vertices = FindVertices(l, inliers)
 
     fig, ax = plt.subplots()
@@ -246,7 +275,16 @@ if __name__ == "__main__":
     ax.set_ylabel("Y")
     ax.legend()
 
-    fig.savefig("geom.eps")
+    hull = ConvexHull(noisyPts)
+    fig2, ax2 = plt.subplots()
+    ax2.scatter(truthPts[:,0], truthPts[:,1], c='k', label="Truth Points")
+    ax2.scatter(noisyPts[:,0], noisyPts[:,1], c='r', label="Noisy Points")
+    for simplex in hull.simplices:
+        plt.plot(noisyPts[simplex, 0], noisyPts[simplex, 1], 'k-')
+
+    fig3, ax3 = plt.subplots()
+    ax3.imshow(img)
+
 
 
     plt.show()
