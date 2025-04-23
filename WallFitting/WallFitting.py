@@ -247,7 +247,16 @@ if __name__ == "__main__":
 
     l, cost, inliers = FitMultipleLines(noisyPts, thr_d=0.4)
     img_raw = MakeGrayscale(noisyPts)
-    img = cv2.GaussianBlur(img_raw, (9, 9), 0)
+    img = cv2.GaussianBlur(img_raw, (3, 3), 0)
+
+    #Create default parametrization LSD
+    lsd = cv2.createLineSegmentDetector(0)
+
+    #Detect lines in the image
+    lines = lsd.detect(img)[0] #Position 0 of the returned tuple are the detected lines
+
+    #Draw detected lines in the image
+    drawn_img = lsd.drawSegments(img,lines)
     
     # dst = cv2.cornerHarris(img, 2, 27, 0.04)
     # dst = cv2.dilate(dst,None)
