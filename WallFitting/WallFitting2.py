@@ -71,6 +71,8 @@ def FitLine_ransac(pts, thr_d=0.8, maxIter=10000, alpha=1, beta=1):
         dx = pt2[0] - pt1[0]
         dy = pt2[1] - pt1[1]
 
+
+
         l = np.array([dy, -dx, dx*pt1[1] - dy*pt1[0]])
         d = CalculateDistFromLine(l, pts).flatten()
         numInliers = np.sum(np.abs(d) <= thr_d)
