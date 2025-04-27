@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import cv2
 
-from feature_matching.feature_matching_utils import load_imgs_gray, show_imgs, visualize_sift, find_match, visualize_find_match, compute_F, visualize_epipolar_lines, compute_camera_pose, visualize_camera_poses
+from feature_matching.feature_matching_utils import load_imgs_gray, show_imgs, visualize_sift, find_match, visualize_find_match, compute_F, visualize_epipolar_lines, compute_camera_pose, visualize_camera_poses, triangulation, visualize_camera_poses_with_pts, disambiguate_pose, visualize_camera_pose_with_pts, my_warp_perspective, visualize_img_pair
 
 def main():
   parser = argparse.ArgumentParser(description='Extract 2D perspective views from panoramic images.')
@@ -57,13 +57,53 @@ def get_camera_intrinsics(w, h):
   return np.array(
     [[fx, 0,  cx],
      [0,  fy, cy],
-     [0,  0,  0]])
+     [0,  0,  1]])
+
+def compute_rectification(K, R, C):
+  """
+  Compute the rectification homographies for both left and right images.
+
+  Args:
+  - K (np.ndarray): Intrinsic camera matrix (3x3).
+  - R (np.ndarray): Rotation matrix (3x3) of the second camera.
+  - C (np.ndarray): Camera center of the second camera (3x1).
+  
+  Returns:
+  - H1 (np.ndarray): Homography for the left image (3x3).
+  - H2 (np.ndarray): Homography for the right image (3x3).
+  """
+
+  # find rectification, rotation matrix R_rect s.t. x-axis alings with the baseline
+
+  # camera one
+  #P1 = K @ np.hstack([np.eye(3), np.zeros((3, 1))])
+  #P2 = K @ R @ np.hstack([np.eye(3), -C])
+
+  rx = C / np.linalg.norm(C)
+
+  rz_0 = np.array([0,0,1]).reshape(3, 1)
+  rz_base = rz_0 - (np.dot(rz_0.T[0], rx.T[0])) * rx
+  rz = rz_base / np.linalg.norm(rz_base)
+
+  ry = np.cross(rz.T[0], rx.T[0])
+
+  R_rect = np.vstack([rx.T, ry.T, rz.T])
+
+  # find the rectification homographices for both images
+
+  H1 = K @ R_rect @ np.linalg.inv(K)
+  H2 = K @ R_rect @ R.T @ np.linalg.inv(K)
+
+  return H1, H2
 
 def get_3d_pt_cloud(path):
   img_paths = [img for img in os.listdir(path) if ".jpg" in img]
-  print(img_paths)
+  #print(img_paths)
   imgs = load_imgs_gray(path, ["view_0.jpg", "view_1.jpg"])
-  show_imgs(imgs)
+  #path = "/Users/rvolkov/Documents/uni/5561/building-mapper/feature_matching/pouya_test_imgs_2/"
+  ##imgs = load_imgs_gray("path", ["Users/rvolkov/Documents/uni/5561/building-mapper/pouya_test_imgs/view_0.png", "Users/rvolkov/Documents/uni/5561/building-mapper/pouya_test_imgs/view_1.png"])
+  #imgs = load_imgs_gray(path, ["view_0.png", "view_1.png"])
+  #show_imgs(imgs)
 
   im1 = imgs[0]
   im2 = imgs[1]
@@ -90,10 +130,65 @@ def get_3d_pt_cloud(path):
   K1 = get_camera_intrinsics(w, h)
   K2 = get_camera_intrinsics(w2, h2)
 
-  Rs, Cs = compute_camera_pose(F, K1)
+  E = K2.T @ F @ K1
+
+  # run QR decomp on fundamental matrix
+
+  U, _, V_t = np.linalg.svd(E)
+
+  W_mat = np.array([
+     [0, -1, 0],
+     [1, 0, 0],
+     [0, 0, 1]
+  ])
+
+  R1 = U @ W_mat @ V_t
+  R2 = U @ W_mat.T @ V_t
+
+  # check determinant of rotation matrices
+  if np.linalg.det(R1) < 0:
+    R1 = -R1
+  if np.linalg.det(R2) < 0:
+    R2 = -R2
+
+
+  t1 = U[:,2].reshape((3, 1))
+  t2 = -U[:, 2].reshape((3, 1))
+
+  Rs = [R1, R1, R2, R2]
+  Cs = [t1, t2, t1, t2]
 
   visualize_camera_poses(Rs, Cs)
 
+#  K1 = np.eye(3)
+#  K2 = np.eye(3)
+
+  # triangulation
+  pts3Ds = []
+  P1 = K1 @ np.hstack([np.eye(3), np.zeros((3, 1))])
+  for R, C in zip(Rs, Cs):
+    #P2 = K2 @ R @ np.hstack([np.eye(3), -C])
+    P2 = K2 @ np.hstack([R, -R @ C])
+    pts3D = triangulation(P1, P2, (x1, x2))
+    pts3Ds.append(pts3D)
+
+  visualize_camera_poses_with_pts(Rs, Cs, pts3Ds)
+
+  # Step 3: disambiguate camera poses
+  R, C, pts3D = disambiguate_pose(Rs, Cs, pts3Ds, K1, (h, w))
+  visualize_camera_pose_with_pts(R, C, pts3D)
+
+  print("det(K1):", np.linalg.det(K1))
+
+  # Step 4: rectification
+  H1, H2 = compute_rectification(K1, R, C)
+  H1 = H1 / H1[2,2]
+  H2 = H2 / H2[2,2]
+  print("H1:", H1)
+  print("H2:", H2)
+  img_left_w = my_warp_perspective(im1, H1, (h, w)) # Todo compute warped img left: Hint warp img_left using H1 
+  img_right_w = my_warp_perspective(im2, H2, (h2, w2)) # Todo compute warped img right: Hint warp img_left using H1 
+  visualize_img_pair(img_left_w, img_right_w)
 
 def all_opencv(path):
   img_paths = [img for img in os.listdir(path) if ".jpg" in img]
@@ -169,3 +264,5 @@ def all_opencv(path):
   plt.subplot(121),plt.imshow(img5)
   plt.subplot(122),plt.imshow(img3)
   plt.show()
+
+
