@@ -1,5 +1,6 @@
 import numpy as np
-from scipy.sparse import lil_matrix
+from scipy.sparse import lil_matrix, block_diag, csc_matrix
+import scipy.sparse.linalg as sps
 import time
 from scipy.optimize import least_squares
 
@@ -137,6 +138,40 @@ def ComputeReprojError(params, cam, nPts, pts_obs):
         totalReprojError += np.sum(np.linalg.norm(e, axis=1))
     return totalReprojError
 
+def ComputeResidual(params, cam, nPts, pts_obs):
+    # Description: Computes the total reprojection error over all points
+    # Inputs:
+    #   var     | type    | size      | descr
+    #   cam     | list    | nCams     | A list containing the camera matrices (cam[i][0] = K,  cam[i][1] = [R_i | t_i]). Each index corresponds to the camera ID
+    #   pts_3d  | ndarray | (nPts, 3) | The estimated 3d points in the World frame. Each row index corresponds to the point ID
+    #   pts_obs | ndarray | (nObs, 4) | The observed points in each camera frame. Column order = (camID, ptID, u, v)
+    nCams = len(cam)
+    nObs = pts_obs.shape[0]
+    pts_3d = np.reshape(params[nCams*7:], (nPts, 3))
+    e = np.zeros((2*nObs, 1))
+    for obs in range(nObs):
+        camID = pts_obs[obs, 0].astype(int)
+        ptId = pts_obs[obs, 1].astype(int)
+        u, v = pts_obs[obs, 2:]
+        X_w = np.concatenate((pts_3d[ptId].reshape((3, 1)), np.ones((1,1))), axis=0)
+        # Estimated projected points
+        # Compute camera matrix
+        q = params[camID*7:camID*7+4]
+        R = quat2dcm(q)
+        t = params[camID*7+4:camID*7+7]
+        M = np.block([R, t.reshape((3, 1))])
+        x_homo = M @ X_w
+        x_homo = -x_homo[0:2, :]/x_homo[-1, :]
+        f = cam[camID][0]
+        k1 = cam[camID][1]
+        k2 = cam[camID][2]
+        p_norm = np.linalg.norm(x_homo, axis=0)
+        r = 1 + k1 * p_norm**2 + k2 * p_norm**4
+        x_hat = f*r*x_homo
+        e[2*obs:2*obs+2, 0] = (np.array([[u], [v]]) - x_hat).flatten()
+
+    return e
+
 def ComputeJacobian_basic(params, cam, nPts, pts_obs):
     nCams = len(cam)
     nObs = pts_obs.shape[0]
@@ -202,29 +237,34 @@ def ComputeJacobian_sparse(params, cam, nPts, pts_obs):
     # Build point jacobians (block)
     nBlocks = pts_3d.shape[0]
     J_x = []
+    D_inv = []
     for j in range(nBlocks):
-        camInBlock = (pts_obs[pts_obs[:, 1] == j, 0]).flatten
+        camInBlock = (pts_obs[pts_obs[:, 1] == j, 0]).flatten().astype(int)
         X_w = np.array([pts_3d[j, 0], pts_3d[j, 1], pts_3d[j, 2], 1])
         J_block = np.zeros((camInBlock.size*2, 3))
-        for i in camInBlock:
-            f = cam[i][0]
+        for i in range(camInBlock.size):
+            camId = camInBlock[i]
+            f = cam[camId][0]
             K = np.array([[f, 0, 0], [0, f, 0]])
-            q = params[i*7:i*7+4]
+            q = params[camId*7:camId*7+4]
             R = quat2dcm(q)
-            t = params[i*7+4:i*7+7]
+            t = params[camId*7+4:camId*7+7]
             M = np.block([R, t.reshape((3, 1))])
             X_prime = M @ X_w.reshape((4, 1))
             xp = X_prime[0, 0]
             yp = X_prime[1, 0]
             zp = X_prime[2, 0]
             dp_dX_prime = np.array([[1/zp, 0, -xp/zp**2], [0, 1/zp, -yp/zp**2], [0, 0, 0]])
-            J_block[2*i:2*i+2] = K @ dp_dX_prime @ R
+            J_block[2*i:2*i+2, :] = K @ dp_dX_prime @ R
+        D_inv_block = np.linalg.inv(J_block.T @ J_block)
         J_x.append(J_block)
+        D_inv.append(D_inv_block)
+    J_x = block_diag(J_x, "csc")
+    D_inv = block_diag(D_inv, "csc")
 
+    J_c = np.zeros((2*nObs, nCams*7))
     # Build camera jacobians
-
     for row in range(nObs):
-        # print(row/nObs)
         camID = pts_obs[row, 0].astype(int)
         ptId = pts_obs[row, 1].astype(int)
         f = cam[camID][0]
@@ -241,10 +281,8 @@ def ComputeJacobian_sparse(params, cam, nPts, pts_obs):
         yp = X_prime[1, 0]
         zp = X_prime[2, 0]
         dp_dxprime = np.array([[ 1/zp, 0, -xp/zp ], [ 0, 1/zp, -yp/zp ], [0, 0, 0]])
-        # dX'/dX
         # For the camera params
         qw, qx, qy, qz = q.flatten()
-
         # dX'/dR
         O = np.zeros((1, 3))
         dXp_dR = np.block([[X_prime.T, O, O], [O, X_prime.T, O], [O, O, X_prime.T]])
@@ -258,13 +296,39 @@ def ComputeJacobian_sparse(params, cam, nPts, pts_obs):
                           [2*qx, 2*qw, 2*qz, 2*qy], 
                           [0, -4*qx, -4*qy, 0]])
         dXp_dt = np.eye(3)
-
         J_c1 = K @ dp_dxprime @ dXp_dR @ dR_dq
         J_c2 = K @ dp_dxprime @ dXp_dt
-        J_c = np.block([J_c1, J_c2])
+        J_c[2*row:2*row+2, camID*7:camID*7+7] = np.block([J_c1, J_c2])
 
-    return J
+    return J_c, J_x, D_inv
     
+def GaussNewton_sparse(res_fun, J_fun, params, cam, nPts, pts_obs, tol=1e-4):
+    # Compute the initial cost
+    res = res_fun(params, cam, nPts, pts_obs)
+    cost = np.linalg.norm(res)
+    print(cost)
+    nCams = len(cam)
+    while cost > tol:
+        res = res_fun(params, cam, nPts, pts_obs)
+        cost = np.linalg.norm(res)
+        print(cost)
+        J_c, J_x, D_inv = ComputeJacobian_sparse(params, cam, nPts, pts_obs)
+        # D = J_x.T @ J_x
+        A = J_c.T @ J_c
+        B = J_c.T @ J_x
+        # D_inv = sps.inv(D)
+        
+        e_c = J_c.T @ res
+        e_x = J_x.T @ res
+        delta_c = np.linalg.inv(A - B@D_inv@B.T) @ (e_c - B@D_inv@e_x)
+        delta_x = D_inv @ (e_x - B.T@delta_c)
+
+        params[0:7*nCams] += delta_c.flatten()
+        params[7*nCams:] += delta_x.flatten()
+        
+    return params, res
+
+
 
 if __name__ == "__main__":
     import sys
@@ -283,12 +347,8 @@ if __name__ == "__main__":
     # J = ComputeJacobian(params, cam, nPts, pts_obs)
 
     t0 = time.time()
-    res = least_squares(ComputeReprojError, params, jac_sparsity=ComputeJacobian, verbose=2, x_scale='jac', ftol=1e-4, method='trf',
-                    args=(cam, nPts, pts_obs))
+    params, res = GaussNewton_sparse(ComputeResidual, ComputeJacobian_sparse, params, cam, nPts, pts_obs)
     t1 = time.time()
-
-
-
 
     print("done")
 
