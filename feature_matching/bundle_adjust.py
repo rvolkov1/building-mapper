@@ -199,7 +199,30 @@ def ComputeJacobian_sparse(params, cam, nPts, pts_obs):
     # Let's first tackle the block diagonal matrix of point jacobians
     uniquePtIds, counts = np.unique(pts_obs[:, 1], return_counts=True)
 
-    # Build the jacobian for each observation
+    # Build point jacobians (block)
+    nBlocks = pts_3d.shape[0]
+    J_x = []
+    for j in range(nBlocks):
+        camInBlock = (pts_obs[pts_obs[:, 1] == j, 0]).flatten
+        X_w = np.array([pts_3d[j, 0], pts_3d[j, 1], pts_3d[j, 2], 1])
+        J_block = np.zeros((camInBlock.size*2, 3))
+        for i in camInBlock:
+            f = cam[i][0]
+            K = np.array([[f, 0, 0], [0, f, 0]])
+            q = params[i*7:i*7+4]
+            R = quat2dcm(q)
+            t = params[i*7+4:i*7+7]
+            M = np.block([R, t.reshape((3, 1))])
+            X_prime = M @ X_w.reshape((4, 1))
+            xp = X_prime[0, 0]
+            yp = X_prime[1, 0]
+            zp = X_prime[2, 0]
+            dp_dX_prime = np.array([[1/zp, 0, -xp/zp**2], [0, 1/zp, -yp/zp**2], [0, 0, 0]])
+            J_block[2*i:2*i+2] = K @ dp_dX_prime @ R
+        J_x.append(J_block)
+
+    # Build camera jacobians
+
     for row in range(nObs):
         # print(row/nObs)
         camID = pts_obs[row, 0].astype(int)
@@ -239,10 +262,6 @@ def ComputeJacobian_sparse(params, cam, nPts, pts_obs):
         J_c1 = K @ dp_dxprime @ dXp_dR @ dR_dq
         J_c2 = K @ dp_dxprime @ dXp_dt
         J_c = np.block([J_c1, J_c2])
-        J_p = K @ dp_dxprime @ R
-
-        J[row:row+2, camID*7:camID*7+7] = np.copy(J_c)
-        J[row:row+2, 7*nCams+ptId*3:7*nCams+ptId*3+3] = np.copy(J_p)
 
     return J
     
