@@ -52,7 +52,7 @@ def CalculateDistFromLine(l, x):
     return d
 
 
-def FitLine_ransac(pts, thr_d=0.8, maxIter=10000, alpha=1, beta=1):
+def FitLine_ransac(pts, thr_d=0.8, maxIter=1000, alpha=1, beta=1):
     N = pts.shape[0]
     idxList = np.arange(N)
     lBest = np.zeros(3)
@@ -185,7 +185,7 @@ def FindVertices(lineList, inliers, inlierRadius=1):
     for i, li in enumerate(lineList):
         for j, lj in enumerate(lineList):
             p = np.linalg.cross(li, lj)
-            liXlj[i, j] = p[0:2]/(p[-1] + 1e-6)
+            liXlj[i, j] = p[0:2]/(p[-1] + 1e-8)
 
 
 
@@ -205,24 +205,23 @@ def FindVertices(lineList, inliers, inlierRadius=1):
                 inliers_j = np.sum(d_j <= inlierRadius)/inliers[j].size
                 numInliers[j] = 0.5*inliers_i + 0.5*inliers_j
 
-                fig, ax = plt.subplots()
-                ax.scatter(allInliers[:, 0], allInliers[:, 1], c='k')
-                ax.scatter(liXlj[i, j, 0], liXlj[i, j, 1], c='g')
-
-                xFit = np.array([np.min(allInliers[:, 0]), np.max(allInliers[:, 0])])
-                yFit = -(lineList[i][0]*xFit + lineList[i][2])/lineList[i][1]
-                yFit2 = -(lineList[j][0]*xFit + lineList[j][2])/lineList[j][1]
-                circle = ptc.Circle(liXlj[i,j], inlierRadius)
-                circle.set_fill(False)
-                ax.add_artist(circle)
-                ax.plot(xFit, yFit, c='b', ls='-')
-                ax.plot(xFit, yFit2, c='b', ls='-')
-                pad = 1
-                ax.set_xlim((np.min(allInliers[:, 0]) - pad, np.max(allInliers[:, 0]) + pad))
-                ax.set_ylim((np.min(allInliers[:, 1]) - pad, np.max(allInliers[:, 1]) + pad))
-                print(numInliers[j])
-                plt.show()
-                
+                # fig, ax = plt.subplots()
+                # ax.scatter(allInliers[:, 0], allInliers[:, 1], c='k')
+                # ax.scatter(liXlj[i, j, 0], liXlj[i, j, 1], c='g')
+                #
+                # xFit = np.array([np.min(allInliers[:, 0]), np.max(allInliers[:, 0])])
+                # yFit = -(lineList[i][0]*xFit + lineList[i][2])/lineList[i][1]
+                # yFit2 = -(lineList[j][0]*xFit + lineList[j][2])/lineList[j][1]
+                # circle = ptc.Circle(liXlj[i,j], inlierRadius)
+                # circle.set_fill(False)
+                # ax.add_artist(circle)
+                # ax.plot(xFit, yFit, c='b', ls='-')
+                # ax.plot(xFit, yFit2, c='b', ls='-')
+                # pad = 1
+                # ax.set_xlim((np.min(allInliers[:, 0]) - pad, np.max(allInliers[:, 0]) + pad))
+                # ax.set_ylim((np.min(allInliers[:, 1]) - pad, np.max(allInliers[:, 1]) + pad))
+                # print(numInliers[j])
+                # plt.show()
 
                 
 
@@ -232,7 +231,11 @@ def FindVertices(lineList, inliers, inlierRadius=1):
         bestEndpoints[i, 1] = liXlj[i, minIdx[1]]
     return bestEndpoints
 
+
 def PlotLine(x, l, ax):
+    y = -(l[0]*x + l[2])/l[1]
+    h = ax.plot(x, y, '-')
+    return h
 
 
 def AdjustVertices(corners, pts, sigma):
@@ -241,8 +244,6 @@ def AdjustVertices(corners, pts, sigma):
     corners_2d = np.reshape(corners, (2*numLines, -1))
     corners_unique = np.unique(corners_2d, axis=0)
     
-
-
 
 def MakeGrayscale(pts, scale=5):
 
@@ -269,7 +270,7 @@ def MakeGrayscale(pts, scale=5):
 
 
 if __name__ == "__main__":
-    truthPts, noisyPts = GenerateFloorplan(3, N=100, sigma=0.2)
+    truthPts, noisyPts = GenerateFloorplan(3, N=50, sigma=0.2, rngSeed=1)
 
     # l, cost, inliers = FitLine_ransac(noisyPts, alpha=1, beta=1, thr_d=0.3)
     #
@@ -324,17 +325,62 @@ if __name__ == "__main__":
     ax.set_ylabel("Y")
     ax.legend()
 
-    hull = ConvexHull(noisyPts)
-    fig2, ax2 = plt.subplots()
-    ax2.scatter(truthPts[:,0], truthPts[:,1], c='k', label="Truth Points")
-    ax2.scatter(noisyPts[:,0], noisyPts[:,1], c='r', label="Noisy Points")
-    for simplex in hull.simplices:
-        plt.plot(noisyPts[simplex, 0], noisyPts[simplex, 1], 'k-')
+    # hull = ConvexHull(noisyPts)
+    # fig2, ax2 = plt.subplots()
+    # ax2.scatter(truthPts[:,0], truthPts[:,1], c='k', label="Truth Points")
+    # ax2.scatter(noisyPts[:,0], noisyPts[:,1], c='r', label="Noisy Points")
+    # for simplex in hull.simplices:
+    #     plt.plot(noisyPts[simplex, 0], noisyPts[simplex, 1], 'k-')
+    #
+    # fig3, ax3 = plt.subplots()
+    # ax3.imshow(img)
 
-    fig3, ax3 = plt.subplots()
-    ax3.imshow(img)
+    # Let's build this piece by piece
+    dpi = 300
+    figDemo, axDemo = plt.subplots()
+    axDemo.set_xlabel("X")
+    axDemo.set_ylabel("Y")
+    pad = 1
+    axDemo.set_xlim((np.min(noisyPts[:, 0]) - pad, np.max(noisyPts[:, 0]) + pad))
+    axDemo.set_ylim((np.min(noisyPts[:, 1]) - pad, np.max(noisyPts[:, 1]) + pad))
+    axDemo.plot(truthPts[:, 0], truthPts[:, 1], ls='-', color='k')
+    plt.savefig("truthline.png", dpi=dpi)
+
+    axDemo.scatter(noisyPts[:,0], noisyPts[:,1], c='r', label="Noisy Points")
+    plt.savefig("truthline_noisepts.png", dpi=dpi)
 
 
+    axDemo.clear()
+    axDemo.set_xlabel("X")
+    axDemo.set_ylabel("Y")
+    pad = 1
+    axDemo.set_xlim((np.min(noisyPts[:, 0]) - pad, np.max(noisyPts[:, 0]) + pad))
+    axDemo.set_ylim((np.min(noisyPts[:, 1]) - pad, np.max(noisyPts[:, 1]) + pad))
+    axDemo.scatter(noisyPts[:,0], noisyPts[:,1], c='r', label="Noisy Points")
+    for i in range(len(l)):
+        xFit = np.array([np.min(inliers[i][:, 0]), np.max(inliers[i][:, 0])])
+        yFit = -(l[i][0]*xFit + l[i][2])/l[i][1]
+        axDemo.scatter(inliers[i][:, 0], inliers[i][:, 1], c='g')
+        axDemo.plot(xFit, yFit, c='k', ls='-', lw=4, label="Fitted Lines"*(i==1))
+        plt.savefig(f"noisepts_line{i}.png", dpi=dpi)
+
+
+    for i in range(len(l)):
+        axDemo.scatter(vertices[i, 0, 0], vertices[i, 0, 1], c='m', ec='k', s=200, marker='o', zorder=3)
+        axDemo.scatter(vertices[i, 1, 0], vertices[i, 1, 1], c='m', ec='k', s=200, marker='o', zorder=3)
+    
+    plt.savefig("noisepts_line_corners.png", dpi=dpi)
+
+    # BUG!!!
+    # axDemo.clear()
+    # axDemo.set_xlabel("X")
+    # axDemo.set_ylabel("Y")
+    # pad = 1
+    # axDemo.set_xlim((np.min(noisyPts[:, 0]) - pad, np.max(noisyPts[:, 0]) + pad))
+    # axDemo.set_ylim((np.min(noisyPts[:, 1]) - pad, np.max(noisyPts[:, 1]) + pad))
+    # axDemo.scatter(noisyPts[:,0], noisyPts[:,1], c='r', label="Noisy Points")
+    # for i in range(len(l)):
+    #     axDemo.plot(vertices[i, :, 0], vertices[i, :, 1], c='k', ls='-', lw=4, label="Fitted Lines"*(i==1))
 
     plt.show()
 
