@@ -7,4 +7,3 @@ if __name__ == "__main__":
   main_dir = "zind_subset"
 
   run_recon_all(main_dir)
-
