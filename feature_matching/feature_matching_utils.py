@@ -76,7 +76,7 @@ def find_match(img1, img2, dist_thr=.7):
       x1.append(p1)
       x2.append(p2)
 
-  return np.array(x1), np.array(x2)
+  return np.array(x1), np.array(x2), descriptors1, descriptors2
 
 def visualize_find_match(img1, img2, x1, x2, img_h=500):
     assert x1.shape == x2.shape, 'x1 and x2 should have same shape!'
@@ -218,8 +218,8 @@ def my_warp_perspective(img, M, size):
   Y, X = np.mgrid[0:outH, 0:outW]
   pad = np.ones_like(X)
   points = np.concatenate([X.reshape([-1, 1]), Y.reshape([-1, 1]), pad.reshape([-1, 1])], axis=-1)
-  #points = (np.linalg.inv(M) @ points.T).T
-  points = (M @ points.T).T
+  points = (np.linalg.inv(M) @ points.T).T
+  #points = (M @ points.T).T
   points = points[:, 0:2] / points[:, 2][:, np.newaxis]
 
   # biliear interpolation of img on new points
@@ -482,7 +482,6 @@ def draw_camera(ax, R, C, scale=0.2):
     ax.plot([C[0], vertices[0, 2]], [C[1], vertices[1, 2]], [C[2], vertices[2, 2]], 'k-')
     ax.plot([C[0], vertices[0, 3]], [C[1], vertices[1, 3]], [C[2], vertices[2, 3]], 'k-')
 
-
 def visualize_camera_poses(Rs, Cs):
   assert(len(Rs) == len(Cs) == 4)
   fig = plt.figure(figsize=(20, 10))
@@ -585,7 +584,7 @@ def disambiguate_pose(Rs, Cs, pts3Ds, K=None, screen_size=None):
     for i in range(pts.shape[0]):
       pt = pts[i].reshape((3, 1))
 
-      r3 = R[2].reshape((1, 3))
+      r3 = R[2, :].reshape((1, 3))
 
       out = r3 @ (pt - C.reshape((3,1)))
 
@@ -594,7 +593,7 @@ def disambiguate_pose(Rs, Cs, pts3Ds, K=None, screen_size=None):
 
     print("num inliers", inliers)
     #if (inliers > most_in):
-    if (idx == 1):
+    if (idx == 2):
       best_idx = idx
       best_R = R
       best_C = C
@@ -636,6 +635,56 @@ def visualize_img_pair(img1, img2, filename=None):
   plt.axis('off')
 
   if filename:   
+    plt.savefig(filename, bbox_inches='tight')
+  else:
+    plt.show()
+
+def dense_match(img1, img2, des1, des2):
+  """
+  Estimate disparity by finding dense correspondences between two images.
+  
+  Args:
+  - img1 (np.ndarray): First image, typically a grayscale image, of shape (H, W).
+  - img2 (np.ndarray): Second image, typically a grayscale image, of shape (H, W).
+  - descriptors1 (np.ndarray): Feature descriptors for the first image, shape (H, W, D), where D is the descriptor dimension.
+  - descriptors2 (np.ndarray): Feature descriptors for the second image, shape (H, W, D).
+1.0    
+  Returns:
+  - disparity_map (np.ndarray): Disparity map of shape (H, W), representing the pixel-wise disparity between img1 and img2.
+  """
+
+  #H, W, _ = des1.shape
+  H, W = des1.shape
+
+  # img 1 is left_img
+
+  disparity_map = np.zeros_like(img1, dtype=np.int32)
+
+  for row in range(H):
+    for col in range(W):
+
+      d_min = np.inf
+      best_des = col
+      
+      for i in range(col):
+        if (i >= 0 and i < W):
+          d = np.linalg.norm(des1[row][col] - des2[row][i])
+          if (d < d_min):
+            d_min = d
+            best_des = np.abs(i - col)
+        else:
+          break
+
+      disparity_map[row][col] = best_des
+
+  return disparity_map
+
+def visualize_disparity_map(disparity, filename=None):
+  disparity[disparity > 150] = 150
+  plt.figure(figsize=(20, 10))
+  plt.imshow(disparity, cmap='jet')
+
+  if filename:
     plt.savefig(filename, bbox_inches='tight')
   else:
     plt.show()
