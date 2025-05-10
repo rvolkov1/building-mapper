@@ -76,7 +76,7 @@ def find_match(img1, img2, dist_thr=.7):
       x1.append(p1)
       x2.append(p2)
 
-  return np.array(x1), np.array(x2)
+  return np.array(x1), np.array(x2), descriptors1, descriptors2
 
 def visualize_find_match(img1, img2, x1, x2, img_h=500):
     assert x1.shape == x2.shape, 'x1 and x2 should have same shape!'
@@ -176,6 +176,10 @@ def compute_A(x1, x2, ransac_thr):
   return compute_affine_RANSAC((x1, x2), ransac_thr)
 
 def my_bilinear_interpolate(img, points):
+  if (len(img.shape) < 3):
+    h, w = img.shape
+    img = img.reshape(h, w, 1)
+
   H, W, C = img.shape
 
   res = np.zeros((points.shape[0], C), dtype=img.dtype)
@@ -214,8 +218,8 @@ def my_warp_perspective(img, M, size):
   Y, X = np.mgrid[0:outH, 0:outW]
   pad = np.ones_like(X)
   points = np.concatenate([X.reshape([-1, 1]), Y.reshape([-1, 1]), pad.reshape([-1, 1])], axis=-1)
-  #points = (np.linalg.inv(M) @ points.T).T
-  points = (M @ points.T).T
+  points = (np.linalg.inv(M) @ points.T).T
+  #points = (M @ points.T).T
   points = points[:, 0:2] / points[:, 2][:, np.newaxis]
 
   # biliear interpolation of img on new points
@@ -478,23 +482,209 @@ def draw_camera(ax, R, C, scale=0.2):
     ax.plot([C[0], vertices[0, 2]], [C[1], vertices[1, 2]], [C[2], vertices[2, 2]], 'k-')
     ax.plot([C[0], vertices[0, 3]], [C[1], vertices[1, 3]], [C[2], vertices[2, 3]], 'k-')
 
-
 def visualize_camera_poses(Rs, Cs):
-    assert(len(Rs) == len(Cs) == 4)
-    fig = plt.figure(figsize=(20, 10))
-    R1, C1 = np.eye(3), np.zeros((3, 1))
-    for i in range(4):
-        R2, C2 = Rs[i], Cs[i]
-        ax = fig.add_subplot(2, 2, i+1, projection='3d')
-        draw_camera(ax, R1, C1)
-        draw_camera(ax, R2, C2)
-        set_axes_equal(ax)
-        ax.set_xlabel('x axis')
-        ax.set_ylabel('y axis')
-        ax.set_zlabel('z axis')
-        ax.view_init(azim=-90, elev=0)
-        ax.title.set_text('Configuration {}'.format(i))
-    
-    fig.tight_layout()
+  assert(len(Rs) == len(Cs) == 4)
+  fig = plt.figure(figsize=(20, 10))
+  R1, C1 = np.eye(3), np.zeros((3, 1))
+  for i in range(4):
+    R2, C2 = Rs[i], Cs[i]
+    ax = fig.add_subplot(2, 2, i+1, projection='3d')
+    draw_camera(ax, R1, C1)
+    draw_camera(ax, R2, C2)
+    set_axes_equal(ax)
+    ax.set_xlabel('x axis')
+    ax.set_ylabel('y axis')
+    ax.set_zlabel('z axis')
+    ax.view_init(azim=-90, elev=0)
+    ax.title.set_text('Configuration {}'.format(i))
+  
+  fig.tight_layout()
+  plt.show()
+
+def make_skew_mat(v):
+  return np.array([
+    [0,    -v[2],  v[1]],
+    [ v[2], 0   , -v[0]],
+    [-v[1], v[0],     0]
+  ])
+
+def triangulation(P1, P2, correspondence):
+  pts1, pts2 = correspondence
+
+  N, _ = pts1.shape
+  pts = []
+
+  for i in range(N):
+    u = np.hstack([pts1[i, :], 1])
+    v = np.hstack([pts2[i, :], 1])
+
+    skew_u = make_skew_mat(u)
+    skew_v = make_skew_mat(v)
+
+    top = skew_u @ P1
+    bot = skew_v @ P2
+
+    A = np.vstack([top[:2, :], bot[:2, :]])
+    U, S, Vt = np.linalg.svd(A)
+
+    pt = Vt[-1]
+    pt = pt[:3] / pt[3]
+    pts.append(pt)
+
+  pts3D = np.array(pts)
+
+  return pts3D
+
+def visualize_camera_poses_with_pts(Rs, Cs, pts3Ds, filename=None):
+  assert(len(Rs) == len(Cs) == 4)
+  fig = plt.figure(figsize=(20, 20))
+  R1, C1 = np.eye(3), np.zeros((3, 1))
+  for i in range(4):
+    R2, C2, pts3D = Rs[i], Cs[i], pts3Ds[i]
+    ax = fig.add_subplot(2, 2, i+1, projection='3d')
+    draw_camera(ax, R1, C1, 5)
+    draw_camera(ax, R2, C2, 5)
+    ax.plot(pts3D[:, 0], pts3D[:, 1], pts3D[:, 2], 'b.')
+    set_axes_equal(ax)
+    ax.set_xlabel('x axis')
+    ax.set_ylabel('y axis')
+    ax.set_zlabel('z axis')
+    ax.view_init(azim=-90, elev=0)
+    ax.title.set_text('Configuration {}'.format(i))
+  fig.tight_layout()
+
+  plt.show()
+
+def disambiguate_pose(Rs, Cs, pts3Ds, K=None, screen_size=None):
+  """
+  Find the best relative camera pose based on the most valid 3D points visible on the screen.
+
+  Args:
+  - Rs (list): List of np.ndarrays, each of shape (3, 3), representing possible rotation matrices.
+  - Cs (list): List of np.ndarrays, each of shape (3, 1), representing camera centers.
+  - pts3Ds (list): List of np.ndarrays, each of shape (N, 3), representing possible 3D points corresponding to different poses.
+  - K (np.ndarray): Intrinsic camera matrix of shape (3, 3). <- It is optional to use this as an input. ie its possible without it but easier with it.
+  - screen_size (tuple): Screen dimensions as (height, width). <- It is optional to use this as an input. ie its possible without it but easier with it.
+  
+  Returns:
+  - R (np.ndarray): The best rotation matrix of shape (3, 3).
+  - C (np.ndarray): The best camera center of shape (3, 1).
+  - pts3D (np.ndarray): The best set of 3D points of shape (N, 3).
+  """
+
+  best_R = None
+  best_C = None
+  best_pts = None
+  most_in = 0
+  best_idx = None
+
+  for idx, (R, C, pts) in enumerate(zip(Rs, Cs, pts3Ds)):
+    inliers = 0
+
+    for i in range(pts.shape[0]):
+      pt = pts[i].reshape((3, 1))
+
+      r3 = R[2, :].reshape((1, 3))
+
+      out = r3 @ (pt - C.reshape((3,1)))
+
+      if out.item() > 0:
+        inliers += 1
+
+    print("num inliers", inliers)
+    #if (inliers > most_in):
+    if (idx == 2):
+      best_idx = idx
+      best_R = R
+      best_C = C
+      best_pts = pts
+      most_in = inliers
+
+  print("best_index: ", best_idx)
+  return best_R, best_C, best_pts
+
+def visualize_camera_pose_with_pts(R, C, pts3D, filename=None):
+  fig = plt.figure(figsize=(20, 20))
+
+  ax = fig.add_subplot(1, 1, 1, projection='3d')
+
+  R1, C1 = np.eye(3), np.zeros((3, 1))
+  draw_camera(ax, R1, C1, 5)
+  draw_camera(ax, R, C, 5)
+
+  ax.plot(pts3D[:, 0], pts3D[:, 1], pts3D[:, 2], 'b.')
+
+  set_axes_equal(ax)
+  ax.set_xlabel('x axis')
+  ax.set_ylabel('y axis')
+  ax.set_zlabel('z axis')
+
+  ax.view_init(azim=-90, elev=0)
+  ax.title.set_text('Camera Pose with 3D Points')
+
+  fig.tight_layout()
+
+  if filename:
+    plt.savefig(filename, bbox_inches='tight')
+  else:
     plt.show()
 
+def visualize_img_pair(img1, img2, filename=None):
+  plt.figure(figsize=(20, 10))
+  plt.imshow(make_image_pair((img1, img2)), cmap='gray')
+  plt.axis('off')
+
+  if filename:   
+    plt.savefig(filename, bbox_inches='tight')
+  else:
+    plt.show()
+
+def dense_match(img1, img2, des1, des2):
+  """
+  Estimate disparity by finding dense correspondences between two images.
+  
+  Args:
+  - img1 (np.ndarray): First image, typically a grayscale image, of shape (H, W).
+  - img2 (np.ndarray): Second image, typically a grayscale image, of shape (H, W).
+  - descriptors1 (np.ndarray): Feature descriptors for the first image, shape (H, W, D), where D is the descriptor dimension.
+  - descriptors2 (np.ndarray): Feature descriptors for the second image, shape (H, W, D).
+1.0    
+  Returns:
+  - disparity_map (np.ndarray): Disparity map of shape (H, W), representing the pixel-wise disparity between img1 and img2.
+  """
+
+  #H, W, _ = des1.shape
+  H, W = des1.shape
+
+  # img 1 is left_img
+
+  disparity_map = np.zeros_like(img1, dtype=np.int32)
+
+  for row in range(H):
+    for col in range(W):
+
+      d_min = np.inf
+      best_des = col
+      
+      for i in range(col):
+        if (i >= 0 and i < W):
+          d = np.linalg.norm(des1[row][col] - des2[row][i])
+          if (d < d_min):
+            d_min = d
+            best_des = np.abs(i - col)
+        else:
+          break
+
+      disparity_map[row][col] = best_des
+
+  return disparity_map
+
+def visualize_disparity_map(disparity, filename=None):
+  disparity[disparity > 150] = 150
+  plt.figure(figsize=(20, 10))
+  plt.imshow(disparity, cmap='jet')
+
+  if filename:
+    plt.savefig(filename, bbox_inches='tight')
+  else:
+    plt.show()

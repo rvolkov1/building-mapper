@@ -1,22 +1,84 @@
-"""
-Author: Ross Volkov
-"""
-
 import os
 import argparse
 
 import matplotlib.pyplot as plt
 import numpy as np
 import cv2
+import torch
+import torchvision.transforms.functional
+
+from mast3r.mast3r.model import AsymmetricMASt3R
+from mast3r.mast3r.fast_nn import fast_reciprocal_NNs
+from mast3r.dust3r.dust3r.inference import inference
+from mast3r.dust3r.dust3r.utils.image import load_images
 
 from feature_matching.feature_matching_utils import load_imgs_gray, show_imgs, visualize_sift, find_match, visualize_find_match, compute_F, visualize_epipolar_lines, compute_camera_pose, visualize_camera_poses, triangulation, visualize_camera_poses_with_pts, disambiguate_pose, visualize_camera_pose_with_pts, my_warp_perspective, visualize_img_pair, dense_match, visualize_disparity_map
 
-def main():
-  parser = argparse.ArgumentParser(description='Extract 2D perspective views from panoramic images.')
-  parser.add_argument('--base_dir', type=str, default='zind_subset',
-    help='Root directory containing scene folders (default: zind_subset)')
-    
-  args = parser.parse_args()
+def get_dl_correspondences(im1, im2):
+  device = 'cpu'
+  schedule = 'cosine'
+  lr = 0.01
+  niter = 300
+
+  model_name = "mast3r/checkpoints/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric.pth"
+  # you can put the path to a local checkpoint in model_name if needed
+  model = AsymmetricMASt3R.from_pretrained(model_name).to(device)
+
+
+  #path = "/Users/rvolkov/Documents/uni/5561/building-mapper/zind_subset/0528/2d_views/room 01/corres_0"
+  images = load_images([im1, im2], size=512)
+  output = inference([tuple(images)], model, device, batch_size=1, verbose=False)
+
+  # at this stage, you have the raw dust3r predictions
+  view1, pred1 = output['view1'], output['pred1']
+  view2, pred2 = output['view2'], output['pred2']
+
+  desc1, desc2 = pred1['desc'].squeeze(0).detach(), pred2['desc'].squeeze(0).detach()
+
+  # find 2D-2D matches between the two images
+  matches_im0, matches_im1 = fast_reciprocal_NNs(desc1, desc2, subsample_or_initxy1=8,
+                                                  device=device, dist='dot', block_size=2**13)
+
+  # ignore small border around the edge
+  H0, W0 = view1['true_shape'][0]
+  valid_matches_im0 = (matches_im0[:, 0] >= 3) & (matches_im0[:, 0] < int(W0) - 3) & (
+      matches_im0[:, 1] >= 3) & (matches_im0[:, 1] < int(H0) - 3)
+
+  H1, W1 = view2['true_shape'][0]
+  valid_matches_im1 = (matches_im1[:, 0] >= 3) & (matches_im1[:, 0] < int(W1) - 3) & (
+      matches_im1[:, 1] >= 3) & (matches_im1[:, 1] < int(H1) - 3)
+
+  valid_matches = valid_matches_im0 & valid_matches_im1
+  matches_im0, matches_im1 = matches_im0[valid_matches], matches_im1[valid_matches]
+
+  n_viz = 20
+  num_matches = matches_im0.shape[0]
+  match_idx_to_viz = np.round(np.linspace(0, num_matches - 1, n_viz)).astype(int)
+  viz_matches_im0, viz_matches_im1 = matches_im0[match_idx_to_viz], matches_im1[match_idx_to_viz]
+
+  image_mean = torch.as_tensor([0.5, 0.5, 0.5], device='cpu').reshape(1, 3, 1, 1)
+  image_std = torch.as_tensor([0.5, 0.5, 0.5], device='cpu').reshape(1, 3, 1, 1)
+
+  viz_imgs = []
+  for i, view in enumerate([view1, view2]):
+      rgb_tensor = view['img'] * image_std + image_mean
+      viz_imgs.append(rgb_tensor.squeeze(0).permute(1, 2, 0).cpu().numpy())
+
+  H0, W0, H1, W1 = *viz_imgs[0].shape[:2], *viz_imgs[1].shape[:2]
+  img0 = np.pad(viz_imgs[0], ((0, max(H1 - H0, 0)), (0, 0), (0, 0)), 'constant', constant_values=0)
+  img1 = np.pad(viz_imgs[1], ((0, max(H0 - H1, 0)), (0, 0), (0, 0)), 'constant', constant_values=0)
+  img = np.concatenate((img0, img1), axis=1)
+
+  #plt.figure()
+  #plt.imshow(img)
+  #cmap = plt.get_cmap('jet')
+  #for i in range(n_viz):
+  #    (x0, y0), (x1, y1) = viz_matches_im0[i].T, viz_matches_im1[i].T
+  #    plt.plot([x0, x1 + W0], [y0, y1], '-+', color=cmap(i / (n_viz - 1)), scalex=False, scaley=False)
+
+  #pl.show(block=True)
+
+  return (viz_matches_im0, viz_matches_im1)
 
 def build_camera_rot(angle):
   theta = np.deg2rad(angle)
@@ -96,25 +158,32 @@ def compute_rectification(K, R, C):
 
   return H1, H2
 
-def get_3d_pt_cloud(path):
+def get_dl_recon(path):
   img_paths = [img for img in os.listdir(path) if ".jpg" in img]
   print(img_paths)
   #imgs = load_imgs_gray(path, ["view_0.jpg", "view_1.jpg"])
-  path = "/Users/rvolkov/Documents/uni/5561/building-mapper/feature_matching/pouya_test_imgs_2/"
+  #path = "/Users/rvolkov/Documents/uni/5561/building-mapper/feature_matching/pouya_test_imgs_2/"
   #imgs = load_imgs_gray("path", ["Users/rvolkov/Documents/uni/5561/building-mapper/pouya_test_imgs/view_0.png", "Users/rvolkov/Documents/uni/5561/building-mapper/pouya_test_imgs/view_1.png"])
-  imgs = load_imgs_gray(path, ["view_0.png", "view_1.png"])
-  #show_imgs(imgs)
+
+  im_path_1 = path + "/view_0.jpg"  
+  im_path_2 = path + "/view_1.jpg" 
+
+  print("path:", im_path_1)
+  print("path:", im_path_2)
+  print(os.path.exists(im_path_1))
+  print(os.path.exists(im_path_2))
+
+  imgs = load_imgs_gray(path, ["view_0.jpg", "view_1.jpg"])
+  show_imgs(imgs)
 
   im1 = imgs[0]
   im2 = imgs[1]
 
-  visualize_sift(im1)
-  visualize_sift(im2)
+  #x1, x2, descriptors1, descriptors2 = find_match(im1, im2, dist_thr=0.95)
 
-  x1, x2, descriptors1, descriptors2 = find_match(im1, im2, dist_thr=0.95)
+  x1, x2 = get_dl_correspondences(im_path_1, im_path_2)
+
   visualize_find_match(im1, im2, x1, x2)
-
-  print(x1.shape)
 
   #F = compute_F((x1, x2), eps=2)
   F, mask = cv2.findFundamentalMat(x1, x2,cv2.FM_LMEDS)
@@ -192,80 +261,3 @@ def get_3d_pt_cloud(path):
 
   disparity = dense_match(img_left_w, img_right_w, descriptors1, descriptors1)
   visualize_disparity_map(disparity)
-
-#def all_opencv(path):
-#  img_paths = [img for img in os.listdir(path) if ".jpg" in img]
-#  print(img_paths)
-#  imgs = load_imgs_gray(path, ["view_0.jpg", "view_1.jpg"])
-#  show_imgs(imgs)
-#
-#  im1 = imgs[0]
-#  im2 = imgs[1]  
-#
-#  sift = cv2.SIFT_create()
-#  
-#  # find the keypoints and descriptors with SIFT
-#  kp1, des1 = sift.detectAndCompute(im1,None)
-#  kp2, des2 = sift.detectAndCompute(im2,None)
-#  
-#  # FLANN parameters
-#  FLANN_INDEX_KDTREE = 1
-#  index_params = dict(algorithm = FLANN_INDEX_KDTREE, trees = 5)
-#  search_params = dict(checks=50)
-#  
-#  flann = cv2.FlannBasedMatcher(index_params,search_params)
-#  matches = flann.knnMatch(des1,des2,k=2)
-#  
-#  pts1 = []
-#  pts2 = []
-#
-#  
-#  # ratio test as per Lowe's paper
-#  for i,(m,n) in enumerate(matches):
-#      if m.distance < 0.7*n.distance:
-#          pts2.append(kp2[m.trainIdx].pt)
-#          pts1.append(kp1[m.queryIdx].pt)
-#
-#  pts1 = np.int32(pts1)
-#  pts2 = np.int32(pts2)
-#
-#  print("pts shapes: ", pts1.shape, pts2.shape)
-#
-#  F, mask = cv2.findFundamentalMat(pts1,pts2,cv2.FM_LMEDS)
-#  
-#  # We select only inlier points
-#  pts1 = pts1[mask.ravel()==1]
-#  pts2 = pts2[mask.ravel()==1]
-#
-#  def drawlines(img1,img2,lines,pts1,pts2):
-#      ''' img1 - image on which we draw the epilines for the points in img2
-#          lines - corresponding epilines '''
-#      r,c = img1.shape
-#      img1 = cv2.cvtColor(img1,cv2.COLOR_GRAY2BGR)
-#      img2 = cv2.cvtColor(img2,cv2.COLOR_GRAY2BGR)
-#      for r,pt1,pt2 in zip(lines,pts1,pts2):
-#          color = tuple(np.random.randint(0,255,3).tolist())
-#          x0,y0 = map(int, [0, -r[2]/r[1] ])
-#          x1,y1 = map(int, [c, -(r[2]+r[0]*c)/r[1] ])
-#          img1 = cv2.line(img1, (x0,y0), (x1,y1), color,1)
-#          img1 = cv2.circle(img1,tuple(pt1),5,color,-1)
-#          img2 = cv2.circle(img2,tuple(pt2),5,color,-1)
-#      return img1,img2
-#
-#  # Find epilines corresponding to points in right image (second image) and
-#  # drawing its lines on left image
-#  lines1 = cv2.computeCorrespondEpilines(pts2.reshape(-1,1,2), 2,F)
-#  lines1 = lines1.reshape(-1,3)
-#  img5,img6 = drawlines(im1, im2,lines1,pts1,pts2)
-#  
-#  # Find epilines corresponding to points in left image (first image) and
-#  # drawing its lines on right image
-#  lines2 = cv2.computeCorrespondEpilines(pts1.reshape(-1,1,2), 1,F)
-#  lines2 = lines2.reshape(-1,3)
-#  img3,img4 = drawlines(im2,im1,lines2,pts2,pts1)
-#  
-#  plt.subplot(121),plt.imshow(img5)
-#  plt.subplot(122),plt.imshow(img3)
-#  plt.show()
-
-
