@@ -11,6 +11,7 @@ def skew(v):
                       [-v[1], v[0], 0]])
     return cross
 
+
 def dcm2quat(R):
     eta = np.sqrt(1 + np.linalg.trace(R))/2
     eps = np.zeros(3)
@@ -34,6 +35,7 @@ def dcm2quat(R):
           eps[0] = np.sign(R[0, 2])*eps[0]
           eps[1] = np.sign(R[1, 2])*eps[1]
     return np.concatenate(([eta], eps)).reshape((4, 1))
+
 
 def quat2dcm(q):
     q = q.flatten()
@@ -138,6 +140,7 @@ def ComputeReprojError(params, cam, nPts, pts_obs):
         totalReprojError += np.sum(np.linalg.norm(e, axis=1))
     return totalReprojError
 
+
 def ComputeResidual(params, cam, nPts, pts_obs):
     # Description: Computes the total reprojection error over all points
     # Inputs:
@@ -171,58 +174,6 @@ def ComputeResidual(params, cam, nPts, pts_obs):
         e[2*obs:2*obs+2, 0] = (np.array([[u], [v]]) - x_hat).flatten()
 
     return e
-
-def ComputeJacobian_basic(params, cam, nPts, pts_obs):
-    nCams = len(cam)
-    nObs = pts_obs.shape[0]
-    pts_3d = np.reshape(params[nCams*7:], (nPts, 3))
-    J = np.zeros((nObs*2, 7*nCams + nPts*3))
-    # Build the jacobian for each observation
-    for row in range(nObs):
-        # print(row/nObs)
-        camID = pts_obs[row, 0].astype(int)
-        ptId = pts_obs[row, 1].astype(int)
-        f = cam[camID][0]
-        q = params[camID*7:camID*7+4]
-        R = quat2dcm(q)
-        t = params[camID*7+4:camID*7+7]
-        M = np.block([R, t.reshape((3, 1))])
-        # dp_hat/dp_tilde
-        K = np.array([[f, 0, 0], [0, f, 0]])
-        # dp_tilde/dX'
-        X_w = np.array([pts_3d[ptId, 0], pts_3d[ptId, 1], pts_3d[ptId, 2], 0])
-        X_prime = M @ X_w.reshape((4, 1))
-        xp = X_prime[0, 0]
-        yp = X_prime[1, 0]
-        zp = X_prime[2, 0]
-        dp_dxprime = np.array([[ 1/zp, 0, -xp/zp ], [ 0, 1/zp, -yp/zp ], [0, 0, 0]])
-        # dX'/dX
-        # For the camera params
-        qw, qx, qy, qz = q.flatten()
-
-        # dX'/dR
-        O = np.zeros((1, 3))
-        dXp_dR = np.block([[X_prime.T, O, O], [O, X_prime.T, O], [O, O, X_prime.T]])
-        dR_dq = np.array([[0, 0, -4*qy, -4*qz], 
-                          [-2*qz, 2*qy, 2*qx, -2*qw], 
-                          [2*qy, 2*qz, 2*qw, 2*qx], 
-                          [2*qz, 2*qy, 2*qx, 2*qw], 
-                          [0, -4*qx, 0, -4*qz], 
-                          [-2*qx, -2*qw, 2*qz, 2*qy], 
-                          [-2*qy, 2*qz, -2*qw, 2*qx], 
-                          [2*qx, 2*qw, 2*qz, 2*qy], 
-                          [0, -4*qx, -4*qy, 0]])
-        dXp_dt = np.eye(3)
-
-        J_c1 = K @ dp_dxprime @ dXp_dR @ dR_dq
-        J_c2 = K @ dp_dxprime @ dXp_dt
-        J_c = np.block([J_c1, J_c2])
-        J_p = K @ dp_dxprime @ R
-
-        J[row:row+2, camID*7:camID*7+7] = np.copy(J_c)
-        J[row:row+2, 7*nCams+ptId*3:7*nCams+ptId*3+3] = np.copy(J_p)
-
-    return J
 
 
 def ComputeJacobian_sparse(params, cam, nPts, pts_obs):
