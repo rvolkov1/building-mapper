@@ -13,7 +13,7 @@ model.load_state_dict(torch.load('clipseg/weights/rd64-uni.pth', map_location=to
 
 # load and normalize image
 # image_path = '/building-mapper/pairs/pair3/view_1.png'
-image_path = '/building-mapper/floor_01_partial_room_03_pano_31.jpg'
+image_path = '/building-mapper/floor_01_partial_room_01_pano_43-2.jpg'
 image_name = image_path.split('/')[-1].split('.')[0]
 input_image = Image.open(image_path)
 orig_h, orig_w = input_image.size[1], input_image.size[0]
@@ -29,7 +29,7 @@ transform = transforms.Compose([
 ])
 img = transform(input_image).unsqueeze(0)
 
-prompts = ['window', 'door', 'front wall', 'ceiling', 'floor']
+prompts = ['window', 'door', 'wall', 'ceiling', 'floor']
 l = len(prompts)
 # predict
 with torch.no_grad():
@@ -104,4 +104,4 @@ axes[1].imshow(color_mask); axes[1].axis("off");   axes[1].set_title("Merged Mas
 axes[2].imshow(overlay);    axes[2].axis("off");   axes[2].set_title("Overlay")
 plt.tight_layout()
 cv2.imwrite("binary_mask.png", (color_mask).astype(np.uint8))
-plt.savefig("prediction_res.png")
+plt.savefig("prediction_res.pdf")

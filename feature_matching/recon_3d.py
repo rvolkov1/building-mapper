@@ -12,6 +12,7 @@ import open3d as o3d
 import plotly.graph_objects as go
 
 from feature_matching.HoHoNet.lib.config import config
+from feature_matching.top_down_view import top_down_border
 
 from pathlib import Path
 
@@ -179,7 +180,26 @@ def save_xyzrgb_as_ply(xyzrgb, filename="output.ply"):
 
 
 
+def top_down_view(xyz, x_seg, out_png=None):
+    keep   = x_seg[:,0] != 0
+    pts    = xyz[keep]
+    labels = x_seg[keep,0]
 
+    cmap   = {1:"red", 2:"green", 3:"blue"}
+    colours = [cmap.get(int(l), "gray") for l in labels]
+
+    fig, ax = plt.subplots(figsize=(6,6))
+    ax.scatter(pts[:,0], pts[:,1], s=1, c=colours)
+    ax.set_aspect("equal")
+    ax.set_xlabel("x (m)")
+    ax.set_ylabel("y (m)")
+    ax.set_title("Top‑down semantic view")
+    ax.invert_yaxis()
+    plt.tight_layout()
+
+    if out_png:
+        fig.savefig(out_png, dpi=300, bbox_inches="tight")
+    plt.show()
 
 # Example usage
 
@@ -190,10 +210,12 @@ if __name__ == "__main__":
   seg_resized = cv2.resize(seg_raw, (1024, 512),   # (H=512, W=1024)
                           interpolation=cv2.INTER_NEAREST).astype(np.uint8)
   rgb, depth = predict_dl_pano_depth(pano_path, viz=False)
-  xyz, xyzrgb, x_seg = reproject(rgb, depth, seg=seg_resized, viz=True)
+  xyz, xyzrgb, x_seg = reproject(rgb, depth, seg=seg_resized, viz=False)
   save_xyzrgb_as_ply(xyzrgb, "reprojected.ply")
   print("img.shape:", rgb.shape)
   print("depth.shape:", depth.shape)
   print("xyz.shape:", xyz.shape)
   print("xyzrgb.shape:", xyzrgb.shape)
   print("x_seg.shape:", x_seg.shape)
+  top_down_border(xyzrgb, x_seg, out_png="top_down_semantic.png")
+  
