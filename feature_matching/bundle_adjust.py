@@ -1,48 +1,11 @@
+from rotation_utils import skew, dcm2quat, quat2dcm
+from test_jacobian import GetJacobian_X_prime_t, GetJacobian_X_prime_q, GetJacobian_X_prime_X, GetJacobian_pi_h_X_prime, GetJacobian_full_X, GetJacobian_full_q, GetJacobian_full_t
 import numpy as np
 from scipy.sparse import lil_matrix, block_diag, csc_matrix
 import scipy.sparse.linalg as sps
 import time
 from scipy.optimize import least_squares
 
-def skew(v):
-    v = v.flatten()
-    cross = np.array([[0, -v[2], v[1]], 
-                      [v[2], 0, -v[0]], 
-                      [-v[1], v[0], 0]])
-    return cross
-
-def dcm2quat(R):
-    eta = np.sqrt(1 + np.linalg.trace(R))/2
-    eps = np.zeros(3)
-
-    if (eta != 0):
-        eps[0] = (R[1,2] - R[2,1])/4/eta;
-        eps[1] = (R[2,0] - R[0,2])/4/eta;
-        eps[2] = (R[0,1] - R[1,0])/4/eta;
-    else:
-        eps[0] = np.sqrt((1 + R[0, 0] + 1)/2)
-        eps[1] = np.sqrt((1 + R[1, 1] + 1)/2)
-        eps[2] = np.sqrt((1 + R[2, 2] + 1)/2)
-
-        if eps[0] > 0:
-          eps[1] = np.sign(R[0, 1])*eps[1]
-          eps[2] = np.sign(R[0, 2])*eps[2]
-        elif eps[1] > 0:
-          eps[0] = np.sign(R[0, 1])*eps[0]
-          eps[2] = np.sign(R[1, 2])*eps[2]
-        else:
-          eps[0] = np.sign(R[0, 2])*eps[0]
-          eps[1] = np.sign(R[1, 2])*eps[1]
-    return np.concatenate(([eta], eps)).reshape((4, 1))
-
-def quat2dcm(q):
-    q = q.flatten()
-    eps = q[1:].reshape((3, 1))
-    eta = q[0]
-
-    I = np.eye(3)
-    R = (2*eta**2 - 1)*I + 2*(eps @ eps.T) - 2*eta*skew(eps)
-    return R
     
 
 def ParseDataFile(filename):
@@ -172,64 +135,10 @@ def ComputeResidual(params, cam, nPts, pts_obs):
 
     return e
 
-def ComputeJacobian_basic(params, cam, nPts, pts_obs):
+def ComputeJacobian_sparse(params, cam, nPts, pts_obs, D_damping_factor=0.1):
     nCams = len(cam)
     nObs = pts_obs.shape[0]
     pts_3d = np.reshape(params[nCams*7:], (nPts, 3))
-    J = np.zeros((nObs*2, 7*nCams + nPts*3))
-    # Build the jacobian for each observation
-    for row in range(nObs):
-        # print(row/nObs)
-        camID = pts_obs[row, 0].astype(int)
-        ptId = pts_obs[row, 1].astype(int)
-        f = cam[camID][0]
-        q = params[camID*7:camID*7+4]
-        R = quat2dcm(q)
-        t = params[camID*7+4:camID*7+7]
-        M = np.block([R, t.reshape((3, 1))])
-        # dp_hat/dp_tilde
-        K = np.array([[f, 0, 0], [0, f, 0]])
-        # dp_tilde/dX'
-        X_w = np.array([pts_3d[ptId, 0], pts_3d[ptId, 1], pts_3d[ptId, 2], 0])
-        X_prime = M @ X_w.reshape((4, 1))
-        xp = X_prime[0, 0]
-        yp = X_prime[1, 0]
-        zp = X_prime[2, 0]
-        dp_dxprime = np.array([[ 1/zp, 0, -xp/zp ], [ 0, 1/zp, -yp/zp ], [0, 0, 0]])
-        # dX'/dX
-        # For the camera params
-        qw, qx, qy, qz = q.flatten()
-
-        # dX'/dR
-        O = np.zeros((1, 3))
-        dXp_dR = np.block([[X_prime.T, O, O], [O, X_prime.T, O], [O, O, X_prime.T]])
-        dR_dq = np.array([[0, 0, -4*qy, -4*qz], 
-                          [-2*qz, 2*qy, 2*qx, -2*qw], 
-                          [2*qy, 2*qz, 2*qw, 2*qx], 
-                          [2*qz, 2*qy, 2*qx, 2*qw], 
-                          [0, -4*qx, 0, -4*qz], 
-                          [-2*qx, -2*qw, 2*qz, 2*qy], 
-                          [-2*qy, 2*qz, -2*qw, 2*qx], 
-                          [2*qx, 2*qw, 2*qz, 2*qy], 
-                          [0, -4*qx, -4*qy, 0]])
-        dXp_dt = np.eye(3)
-
-        J_c1 = K @ dp_dxprime @ dXp_dR @ dR_dq
-        J_c2 = K @ dp_dxprime @ dXp_dt
-        J_c = np.block([J_c1, J_c2])
-        J_p = K @ dp_dxprime @ R
-
-        J[row:row+2, camID*7:camID*7+7] = np.copy(J_c)
-        J[row:row+2, 7*nCams+ptId*3:7*nCams+ptId*3+3] = np.copy(J_p)
-
-    return J
-
-
-def ComputeJacobian_sparse(params, cam, nPts, pts_obs):
-    nCams = len(cam)
-    nObs = pts_obs.shape[0]
-    pts_3d = np.reshape(params[nCams*7:], (nPts, 3))
-    # J = np.zeros((nObs*2, 7*nCams + nPts*3))
 
     # Let's first tackle the block diagonal matrix of point jacobians
     uniquePtIds, counts = np.unique(pts_obs[:, 1], return_counts=True)
@@ -247,6 +156,10 @@ def ComputeJacobian_sparse(params, cam, nPts, pts_obs):
             f = cam[camId][0]
             K = np.array([[f, 0, 0], [0, f, 0]])
             q = params[camId*7:camId*7+4]
+            if q[0] < 0:
+                q = -q
+            q = q/np.linalg.norm(q)
+
             R = quat2dcm(q)
             t = params[camId*7+4:camId*7+7]
             M = np.block([R, t.reshape((3, 1))])
@@ -254,9 +167,10 @@ def ComputeJacobian_sparse(params, cam, nPts, pts_obs):
             xp = X_prime[0, 0]
             yp = X_prime[1, 0]
             zp = X_prime[2, 0]
-            dp_dX_prime = np.array([[1/zp, 0, -xp/zp**2], [0, 1/zp, -yp/zp**2], [0, 0, 0]])
+            dp_dX_prime = -np.array([[1/zp, 0, -xp/zp**2], [0, 1/zp, -yp/zp**2], [0, 0, 0]])
             J_block[2*i:2*i+2, :] = K @ dp_dX_prime @ R
-        D_inv_block = np.linalg.inv(J_block.T @ J_block)
+        n = J_block.shape[1]
+        D_inv_block = np.linalg.inv(J_block.T @ J_block + D_damping_factor*np.eye(n))
         J_x.append(J_block)
         D_inv.append(D_inv_block)
     J_x = block_diag(J_x, "csc")
@@ -269,18 +183,22 @@ def ComputeJacobian_sparse(params, cam, nPts, pts_obs):
         ptId = pts_obs[row, 1].astype(int)
         f = cam[camID][0]
         q = params[camID*7:camID*7+4]
+        if q[0] < 0:
+            q = -q
+        q = q/np.linalg.norm(q)
+        
         R = quat2dcm(q)
         t = params[camID*7+4:camID*7+7]
         M = np.block([R, t.reshape((3, 1))])
         # dp_hat/dp_tilde
         K = np.array([[f, 0, 0], [0, f, 0]])
         # dp_tilde/dX'
-        X_w = np.array([pts_3d[ptId, 0], pts_3d[ptId, 1], pts_3d[ptId, 2], 0])
+        X_w = np.array([pts_3d[ptId, 0], pts_3d[ptId, 1], pts_3d[ptId, 2], 1])
         X_prime = M @ X_w.reshape((4, 1))
         xp = X_prime[0, 0]
         yp = X_prime[1, 0]
         zp = X_prime[2, 0]
-        dp_dxprime = np.array([[ 1/zp, 0, -xp/zp ], [ 0, 1/zp, -yp/zp ], [0, 0, 0]])
+        dp_dxprime = -np.array([[ 1/zp, 0, -xp/zp**2 ], [ 0, 1/zp, -yp/zp**2 ], [0, 0, 0]])
         # For the camera params
         qw, qx, qy, qz = q.flatten()
         # dX'/dR
@@ -295,14 +213,21 @@ def ComputeJacobian_sparse(params, cam, nPts, pts_obs):
                           [-2*qy, 2*qz, -2*qw, 2*qx], 
                           [2*qx, 2*qw, 2*qz, 2*qy], 
                           [0, -4*qx, -4*qy, 0]])
+
+        # dXp_dq_numerical = GetJacobian_X_prime_q(params[camID*7:camID*7+7], X_w[0:3])
+
         dXp_dt = np.eye(3)
-        J_c1 = K @ dp_dxprime @ dXp_dR @ dR_dq
+        # J_c1 = K @ dp_dxprime @ dXp_dR @ dR_dq
+        # Just tyring this
+        # J_c1[:, 1:] = -J_c1[:, 1:]
+        # J_c1 = K @ dp_dxprime @ dXp_dq_numerical
+        J_c1 = GetJacobian_full_q(params[camID*7:camID*7+7], X_w[0:3], f)[0:2, :]
         J_c2 = K @ dp_dxprime @ dXp_dt
         J_c[2*row:2*row+2, camID*7:camID*7+7] = np.block([J_c1, J_c2])
 
     return J_c, J_x, D_inv
     
-def GaussNewton_sparse(res_fun, J_fun, params, cam, nPts, pts_obs, tol=1e-4):
+def GaussNewton_sparse(res_fun, J_fun, params, cam, nPts, pts_obs, tol=1e-4, damping_factor=0.1):
     # Compute the initial cost
     res = res_fun(params, cam, nPts, pts_obs)
     cost = np.linalg.norm(res)
@@ -312,9 +237,9 @@ def GaussNewton_sparse(res_fun, J_fun, params, cam, nPts, pts_obs, tol=1e-4):
         res = res_fun(params, cam, nPts, pts_obs)
         cost = np.linalg.norm(res)
         print(cost)
-        J_c, J_x, D_inv = ComputeJacobian_sparse(params, cam, nPts, pts_obs)
+        J_c, J_x, D_inv = ComputeJacobian_sparse(params, cam, nPts, pts_obs, damping_factor)
         # D = J_x.T @ J_x
-        A = J_c.T @ J_c
+        A = J_c.T @ J_c + damping_factor*np.eye(J_c.shape[1])
         B = J_c.T @ J_x
         # D_inv = sps.inv(D)
         
@@ -325,8 +250,93 @@ def GaussNewton_sparse(res_fun, J_fun, params, cam, nPts, pts_obs, tol=1e-4):
 
         params[0:7*nCams] += delta_c.flatten()
         params[7*nCams:] += delta_x.flatten()
+
+        # Normalize quaternions
+        for i in range(nCams):
+            params[i*7:i*7+4] = params[i*7:i*7+4]/np.linalg.norm(params[i*7:i*7+4])
+
         
     return params, res
+
+
+def TestJacobian(cam_params, point_w, cam):
+    point_w = np.concatenate((point_w, [1]))
+    f = cam[0]
+    K = np.array([[f, 0, 0], [0, f, 0]])
+    q = cam_params[0:4]
+    if q[0] < 0:
+        q = -q
+    q = q/np.linalg.norm(q)
+    qw, qx, qy, qz = q.flatten()
+    R = quat2dcm(q)
+    t = cam_params[4:]
+    M = np.block([R, t.reshape((3, 1))])
+    X_prime = M @ point_w.reshape((4, 1))
+    xp, yp, zp = X_prime.flatten()
+
+
+    # Derivative of X_prime wrt cam_params
+    O = np.zeros((1, 3))
+    dXp_dR = np.block([[X_prime.T, O, O], [O, X_prime.T, O], [O, O, X_prime.T]])
+    dR_dq = np.array([[0, 0, -4*qy, -4*qz], 
+                      [-2*qz, 2*qy, 2*qx, -2*qw], 
+                      [2*qy, 2*qz, 2*qw, 2*qx], 
+                      [2*qz, 2*qy, 2*qx, 2*qw], 
+                      [0, -4*qx, 0, -4*qz], 
+                      [-2*qx, -2*qw, 2*qz, 2*qy], 
+                      [-2*qy, 2*qz, -2*qw, 2*qx], 
+                      [2*qx, 2*qw, 2*qz, 2*qy], 
+                      [0, -4*qx, -4*qy, 0]])
+    dXp_dt = np.eye(3)
+    dXp_dq = dXp_dR @ dR_dq
+    dXp_dt_numerical = GetJacobian_X_prime_t(cam_params, point_w[0:3])
+    dXp_dq_numerical = GetJacobian_X_prime_q(cam_params, point_w[0:3])
+
+    dXp_dX = R
+    dXp_dX_numerical = GetJacobian_X_prime_X(cam_params, point_w[0:3])
+
+    dp_dXp = -np.array([[1/zp, 0, -xp/zp**2], [0, 1/zp, -yp/zp**2], [0, 0, 0]])
+    dp_dXp_numerical = GetJacobian_pi_h_X_prime(X_prime.flatten())
+
+    J_X = K @ dp_dXp @ R
+    J_X_numerical = GetJacobian_full_X(cam_params, point_w[0:3], f)
+
+    J_c1 = K @ dp_dXp @ dXp_dR @ dR_dq
+    J_c1_numerical = GetJacobian_full_q(cam_params, point_w[0:3], f)
+
+    J_c2 = K @ dp_dXp @ dXp_dt
+    J_c2_numerical = GetJacobian_full_t(cam_params, point_w[0:3], f)
+    
+
+    print("Analytical dXp_dt: ")
+    print(dXp_dt)
+    print("Numerical dXp_dt: ")
+    print(dXp_dt_numerical)
+    print("Analytical dXp_dq: ")
+    print(dXp_dq)
+    print("Numerical dXp_dq: ")
+    print(dXp_dq_numerical)
+    print("Analytical dXp_dX: ")
+    print(dXp_dX)
+    print("Numerical dXp_dX: ")
+    print(dXp_dX_numerical)
+    print("Analytical dp_dXp: ")
+    print(dp_dXp)
+    print("Numerical dp_dXp: ")
+    print(dp_dXp_numerical)
+
+    print("Analytical J_X: ")
+    print(J_X)
+    print("Numerical J_X: ")
+    print(J_X_numerical)
+    print("Analytical J_c1: ")
+    print(J_c1)
+    print("Numerical J_c1: ")
+    print(J_c1_numerical)
+    print("Analytical J_c2: ")
+    print(J_c2)
+    print("Numerical J_c2: ")
+    print(J_c2_numerical)
 
 
 
@@ -347,8 +357,11 @@ if __name__ == "__main__":
     # J = ComputeJacobian(params, cam, nPts, pts_obs)
 
     t0 = time.time()
-    params, res = GaussNewton_sparse(ComputeResidual, ComputeJacobian_sparse, params, cam, nPts, pts_obs)
+    params, res = GaussNewton_sparse(ComputeResidual, ComputeJacobian_sparse, params, cam, nPts, pts_obs, damping_factor=10)
     t1 = time.time()
+
+    # nCams = len(cam)
+    # TestJacobian(params[0:7], params[nCams*7:nCams*7+3], cam[0])
 
     print("done")
 
