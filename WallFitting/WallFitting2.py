@@ -40,77 +40,99 @@ def GenerateFloorplan(planNum, N=10, sigma=1, rngSeed=None):
 
     return pts, pts + noise
 
+def Cross2(a, b):
+    a = a.flatten()
+    b = b.reshape(2, 1)
+    a_x = np.array([-a[1], a[0]]).reshape(1, 2)
+    return a_x @ b
+
+    
 
 def CalculateDistFromLine(l, x):
-    # l (3,)
-    # x (N,2)
-    N = x.shape[0]
-    l = l.reshape((3, 1))
-    lNorm = np.linalg.norm(l[0:2])
-    x_h = np.hstack((x, np.ones((N, 1))))
-    d = x_h @ l / lNorm
-    return d
+    # l (list)
+    # x (ndarray): (2, N)
+    
+    a = l[0]
+    b = l[1]
+    
+    b_x = np.array([[-b[1,0], b[0,0]]])
+    d = b_x @ (x - a)
+
+    return np.abs(d).flatten()
+
+
+def GetLine(x1, x2):
+    """ Calculates a line from two points 
+    """
+    a = x1
+    b = x2 - x1
+    b = b/np.linalg.norm(b)
+    return [a.reshape(2, 1), b.reshape(2, 1)]
+
+
+def GetLinePts(l, x_lim, y_lim):
+    # Choose the coefficient that captures the most of x_lim or y_lim
+    lbda_min = np.min(( (x_lim[0] - l[0][0])/l[1][0], (y_lim[0] - l[0][1])/l[1][1] ))
+    lbda_max = np.max(( (x_lim[1] - l[0][0])/l[1][0], (y_lim[1] - l[0][1])/l[1][1] ))
+    lbda = np.array([lbda_min, lbda_max]).reshape(1, 2)
+    r = l[0] + l[1] @ lbda
+    return r[0], r[1]
 
 
 def FitLine_ransac(pts, thr_d=0.8, maxIter=10000, alpha=1, beta=1):
     N = pts.shape[0]
     idxList = np.arange(N)
-    lBest = np.zeros(3)
-    numInliersBest = 0
-    costBest = 0
-    inliersBest = np.zeros(N)
+    l_best = np.zeros(3)
+    num_inliers_best = 0
+    val_to_max = 0
+    inliers_best = np.zeros(N)
 
     rng = np.random.default_rng()
 
     iter = 0
-    while numInliersBest < N and iter < maxIter:
+    while num_inliers_best < N and iter < maxIter:
         # Select two points
         idxChoice = rng.choice(idxList, 2, replace=False)
         pt1 = pts[idxChoice[0]]
         pt2 = pts[idxChoice[1]]
-        dx = pt2[0] - pt1[0]
-        dy = pt2[1] - pt1[1]
 
-
-
-        l = np.array([dy, -dx, dx*pt1[1] - dy*pt1[0]])
-        d = CalculateDistFromLine(l, pts).flatten()
-        numInliers = np.sum(np.abs(d) <= thr_d)
-        # if numInliers > numInliersBest:
-        #     numInliersBest = numInliersBest
-        #     lBest = np.copy(l)
+        l = GetLine(pt1, pt2)
+        d = CalculateDistFromLine(l, pts.T)
+        num_inliers = np.sum(np.abs(d) <= thr_d)
         U = CalculateUniformity(l, pts)
-        cost = alpha*numInliers/N + beta*U
-        if cost > costBest:
-            costBest = cost
-            lBest = np.copy(l)
-            inliersBest = np.abs(d) <= thr_d
+        obj_fun = alpha*num_inliers/N + beta*U
+        if obj_fun > val_to_max:
+            num_inliers_best = num_inliers
+            val_to_max = obj_fun
+            l_best = np.copy(l)
+            inliers_best = np.abs(d) <= thr_d
 
         iter += 1
 
-    return lBest, costBest, inliersBest
+    return l_best, val_to_max, inliers_best
         
 def CalculateUniformity(l, pts, thr_d=0.8, showOutput=False):
     # Check for how the inliers are distributed along the line l
-    d = CalculateDistFromLine(l, pts)
-    inlierSelection = (np.abs(d) <= thr_d).flatten()
-    ptsInliers = pts[inlierSelection, :]
-    lineAngle = np.atan2(l[1], l[0])
+    d = CalculateDistFromLine(l, pts.reshape(2, -1))
+
+    inlier_selection = d <= thr_d
+    ptsInliers = pts[inlier_selection, :]
+    lineAngle = np.atan2(l[1][1], l[1][0])[0]
     rotationAngle = lineAngle - np.pi/2
     ct = np.cos(rotationAngle)
     st = np.sin(rotationAngle)
-    DCM = np.array([[ct, st, 0], [-st, ct, 0], [0, 0, 1]])
-    ptsRotated = (DCM[0:2, 0:2] @ ptsInliers.T).T
-    lRotated = DCM @ l
+    DCM = np.array([[ct, st], [-st, ct]])
+    ptsRotated = (DCM @ ptsInliers.T).T
+    l_rotated = [DCM @ l[0], DCM @ l[1]]
 
     # Shift to center of mass
     numInliers = ptsInliers.shape[0]
+    if numInliers == 0:
+        return -1
     x_c = np.sum(ptsRotated[:, 0])/numInliers
     y_c = np.sum(ptsRotated[:, 1])/numInliers
     ptsRotated[:, 0] -= x_c
     ptsRotated[:, 1] -= y_c
-    lRotated[-1] = 0
-    
 
     # Calculate the moment of inertia
     Ixx = np.sum(ptsRotated[:, 1]**2)/numInliers
@@ -128,16 +150,20 @@ def CalculateUniformity(l, pts, thr_d=0.8, showOutput=False):
         print(momentText)
         print(f"U = {U}")
 
-        xFit = np.array([np.min(ptsInliers[:, 0]), np.max(ptsInliers[:, 0])])
-        yFit = -(l[0]*xFit + l[2])/l[1]
-        xFitRotated = np.array([np.min(ptsRotated[:, 0]), np.max(ptsRotated[:, 0])])
-        yFitRotated = -(lRotated[0]*xFitRotated + lRotated[2])/lRotated[1]
+        x_lim = np.array([np.min(ptsInliers[:, 0]), np.max(ptsInliers[:, 0])])
+        y_lim = np.array([np.min(ptsInliers[:, 1]), np.max(ptsInliers[:, 1])])
+        x_lim_rotated = np.array([np.min(ptsRotated[:, 0]), np.max(ptsRotated[:, 0])])
+        y_lim_rotated = np.array([np.min(ptsRotated[:, 1]), np.max(ptsRotated[:, 1])])
+
+        x, y = GetLinePts(l, x_lim, y_lim)
+        x_rotated, y_rotated = GetLinePts(l_rotated, x_lim_rotated, y_lim_rotated)
+        
         fig, ax = plt.subplots(1, 2)
         ax[0].scatter(pts[:, 0], pts[:, 1], c="r")
         ax[0].scatter(ptsInliers[:, 0], ptsInliers[:, 1], c="g")
-        ax[0].plot(xFit, yFit, c="g", ls="-")
+        ax[0].plot(x, y, c="g", ls="-")
         ax[1].scatter(ptsRotated[:, 0], ptsRotated[:, 1], c="g")
-        ax[1].plot(xFitRotated, yFitRotated, c='g', ls='-')
+        ax[1].plot(x_rotated, y_rotated, c='g', ls='-')
         pad = 1
         ax[0].set_xlim((np.min(pts[:, 0]) - pad, np.max(pts[:, 0]) + pad))
         ax[0].set_ylim((np.min(pts[:, 1]) - pad, np.max(pts[:, 1]) + pad))
@@ -157,15 +183,15 @@ def FitMultipleLines(pts, thr_d=0.8, alpha=1, beta=1, minOutlierFrac=0.1):
     l = []
     inliers = []
     inlierPts = []
-    cost = []
+    obj_fun = []
 
     while outlierFrac > minOutlierFrac:
-        l_i, cost_i, inliers_i = FitLine_ransac(ptsAvail, thr_d=thr_d, alpha=alpha, beta=beta)
+        l_i, obj_fun_i, inliers_i = FitLine_ransac(ptsAvail, thr_d=thr_d, alpha=alpha, beta=beta)
         inlierPts.append(ptsAvail[inliers_i])
         inliers.append(inliers_i)
         ptsAvail = np.copy(ptsAvail[np.logical_not(inliers_i)])
         l.append(l_i)
-        cost.append(cost_i)
+        obj_fun.append(obj_fun_i)
         # Calculate fraction of inliers
         numInliers = 0
         for k in range(len(inliers)):
@@ -174,22 +200,32 @@ def FitMultipleLines(pts, thr_d=0.8, alpha=1, beta=1, minOutlierFrac=0.1):
 
         print(outlierFrac)
     
-    return l, cost, inlierPts
+    return l, obj_fun, inlierPts
 
 
 def FindVertices(lineList, inliers, inlierRadius=1):
     # Each line should have two end points, therefore we look for two "real" intersections between each line element.
     # There would have to be some consistency check, as lines that don't correspond to corners may intersect at further away points.
-    
+
     # Compute intersections
     numLines = len(lineList)
     liXlj = np.zeros((numLines, numLines, 2))
     for i, li in enumerate(lineList):
         for j, lj in enumerate(lineList):
-            p = np.linalg.cross(li, lj)
-            liXlj[i, j] = p[0:2]/(p[-1] + 1e-6)
+            a1 = li[0]
+            b1 = li[1]
+            a2 = lj[0]
+            b2 = lj[1]
+            num = Cross2(b1, a1 - a2)
+            den = Cross2(b1, b2)
+            if np.abs(den) < 1e-9:
+                liXlj[i, j] = np.array([np.nan, np.nan])
+            else:
+                lbda = num/den
+                liXlj[i, j] = (a2 + lbda*b2).flatten()
 
 
+    print(liXlj)
 
     # Find the best endpoints for each line (closest to their inliers)
     bestEndpoints = np.zeros((numLines, 2, 2))
@@ -197,44 +233,45 @@ def FindVertices(lineList, inliers, inlierRadius=1):
         numInliers = np.zeros(numLines)
         for j in range(i, numLines):
             if j != i:
-                allInliers = np.vstack((inliers[i],  inliers[j]))
-                # Calculate distance between intersection point and inliers for both lines
-                d = np.linalg.norm(allInliers - liXlj[i, j], axis=1)
-                numInliers[j] = np.sum(d <= inlierRadius)
-                d_i = np.linalg.norm(inliers[i] - liXlj[i, j], axis=1)
-                d_j = np.linalg.norm(inliers[j] - liXlj[i, j], axis=1)
-                inliers_i = np.sum(d_i <= inlierRadius)/inliers[i].size
-                inliers_j = np.sum(d_j <= inlierRadius)/inliers[j].size
-                numInliers[j] = 0.5*inliers_i + 0.5*inliers_j
+                if np.all(np.isfinite(liXlj[i, j])):
+                    allInliers = np.vstack((inliers[i],  inliers[j]))
+                    # Calculate distance between intersection point and inliers for both lines
+                    d = np.linalg.norm(allInliers - liXlj[i, j], axis=1)
+                    numInliers[j] = np.sum(d <= inlierRadius)
+                    d_i = np.linalg.norm(inliers[i] - liXlj[i, j], axis=1)
+                    d_j = np.linalg.norm(inliers[j] - liXlj[i, j], axis=1)
+                    inliers_i = np.sum(d_i <= inlierRadius)/inliers[i].size
+                    inliers_j = np.sum(d_j <= inlierRadius)/inliers[j].size
+                    numInliers[j] = 0.5*inliers_i + 0.5*inliers_j
+                else:
+                    numInliers[j] = 0
 
-                fig, ax = plt.subplots()
-                ax.scatter(allInliers[:, 0], allInliers[:, 1], c='k')
-                ax.scatter(liXlj[i, j, 0], liXlj[i, j, 1], c='g')
+                # fig, ax = plt.subplots()
+                # ax.scatter(allInliers[:, 0], allInliers[:, 1], c='k')
+                # ax.scatter(liXlj[i, j, 0], liXlj[i, j, 1], c='g')
+                #
+                # xFit = np.array([np.min(allInliers[:, 0]), np.max(allInliers[:, 0])])
+                # yFit = -(lineList[i][0]*xFit + lineList[i][2])/lineList[i][1]
+                # yFit2 = -(lineList[j][0]*xFit + lineList[j][2])/lineList[j][1]
+                # circle = ptc.Circle(liXlj[i,j], inlierRadius)
+                # circle.set_fill(False)
+                # ax.add_artist(circle)
+                # ax.plot(xFit, yFit, c='b', ls='-')
+                # ax.plot(xFit, yFit2, c='b', ls='-')
+                # pad = 1
+                # ax.set_xlim((np.min(allInliers[:, 0]) - pad, np.max(allInliers[:, 0]) + pad))
+                # ax.set_ylim((np.min(allInliers[:, 1]) - pad, np.max(allInliers[:, 1]) + pad))
+                # print(numInliers[j])
+                # plt.show()
 
-                xFit = np.array([np.min(allInliers[:, 0]), np.max(allInliers[:, 0])])
-                yFit = -(lineList[i][0]*xFit + lineList[i][2])/lineList[i][1]
-                yFit2 = -(lineList[j][0]*xFit + lineList[j][2])/lineList[j][1]
-                circle = ptc.Circle(liXlj[i,j], inlierRadius)
-                circle.set_fill(False)
-                ax.add_artist(circle)
-                ax.plot(xFit, yFit, c='b', ls='-')
-                ax.plot(xFit, yFit2, c='b', ls='-')
-                pad = 1
-                ax.set_xlim((np.min(allInliers[:, 0]) - pad, np.max(allInliers[:, 0]) + pad))
-                ax.set_ylim((np.min(allInliers[:, 1]) - pad, np.max(allInliers[:, 1]) + pad))
-                print(numInliers[j])
-                plt.show()
-                
 
-                
+
 
         # The two points with the most inliers will be the ends of this segment
         minIdx = np.argpartition(numInliers, -2)[-2:]
         bestEndpoints[i, 0] = liXlj[i, minIdx[0]]
         bestEndpoints[i, 1] = liXlj[i, minIdx[1]]
     return bestEndpoints
-
-def PlotLine(x, l, ax):
 
 
 def AdjustVertices(corners, pts, sigma):
@@ -307,21 +344,23 @@ if __name__ == "__main__":
     # cv2.imshow('dst',img)
 
     vertices = FindVertices(l, inliers)
+    print(vertices)
 
     fig, ax = plt.subplots()
     ax.scatter(truthPts[:,0], truthPts[:,1], c='k', label="Truth Points")
     ax.scatter(noisyPts[:,0], noisyPts[:,1], c='r', label="Noisy Points")
     for i in range(len(l)):
-        xFit = np.array([np.min(inliers[i][:, 0]), np.max(inliers[i][:, 0])])
-        yFit = -(l[i][0]*xFit + l[i][2])/l[i][1]
+        x_lim = np.array([np.min(inliers[i][:, 0]), np.max(inliers[i][:, 0])])
+        y_lim = np.array([np.min(inliers[i][:, 1]), np.max(inliers[i][:, 1])])
+        x_line, y_line = GetLinePts(l[i], x_lim, y_lim)
         ax.scatter(inliers[i][:, 0], inliers[i][:, 1], c='g')
-        ax.plot(xFit, yFit, c='b', ls='-', label="Fitted Lines"*(i==1))
+        ax.plot(x_line, y_line, c='b', ls='-', label="Fitted Lines"*(i==1))
         ax.scatter(vertices[i, 0, 0], vertices[i, 0, 1], c='b')
         ax.scatter(vertices[i, 1, 0], vertices[i, 1, 1], c='b')
         pad = 1
         ax.set_xlim((np.min(noisyPts[:, 0]) - pad, np.max(noisyPts[:, 0]) + pad))
         ax.set_ylim((np.min(noisyPts[:, 1]) - pad, np.max(noisyPts[:, 1]) + pad))
-        ax.annotate(f"l{i}", ((xFit[1] + xFit[0])/2, (yFit[1] + yFit[0])/2))
+        ax.annotate(f"l{i}", ((x_line[1] + x_line[0])/2, (y_line[1] + y_line[0])/2))
     ax.set_xlabel("X")
     ax.set_ylabel("Y")
     ax.legend()

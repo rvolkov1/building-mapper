@@ -1,5 +1,5 @@
 from rotation_utils import skew, dcm2quat, quat2dcm
-from test_jacobian import GetJacobian_X_prime_t, GetJacobian_X_prime_q, GetJacobian_X_prime_X, GetJacobian_pi_h_X_prime, GetJacobian_full_X, GetJacobian_full_q, GetJacobian_full_t
+from numerical_jacobian import *
 import numpy as np
 from scipy.sparse import lil_matrix, block_diag, csc_matrix
 import scipy.sparse.linalg as sps
@@ -60,57 +60,79 @@ def FormCameraMatrix(camRaw):
     return cam, camParams
 
 
-def ComputeReprojError(params, cam, nPts, pts_obs):
-    # Description: Computes the total reprojection error over all points
-    # Inputs:
-    #   var     | type    | size      | descr
-    #   cam     | list    | nCams     | A list containing the camera matrices (cam[i][0] = K,  cam[i][1] = [R_i | t_i]). Each index corresponds to the camera ID
-    #   pts_3d  | ndarray | (nPts, 3) | The estimated 3d points in the World frame. Each row index corresponds to the point ID
-    #   pts_obs | ndarray | (nObs, 4) | The observed points in each camera frame. Column order = (camID, ptID, u, v)
-    nCams = len(cam)
-    totalReprojError = 0
-    pts_3d = np.reshape(params[nCams*7:], (nPts, 3))
-    for camID in range(nCams):
-        # M = cam[camID][0] @ cam[camID][1]
-        # Get all the observed points in the camera frame
-        pointsInCam = pts_obs[pts_obs[:, 0] == camID, 1:]
-        # If we assume all point IDs in pts_obs are in ascending order, then we can just grab the 3d points and not worry about order
-        X_w = np.vstack((pts_3d[pointsInCam[:, 0].astype(int)].T, np.ones((1, pointsInCam.shape[0]))))
+def ComputeReprojError(params, cam, num_points, pts_obs):
+    """
+    Compute the total reprojection error of a set of observations and points.
+
+    Args:
+        param (ndarray): Array containing parameters that are optimized over. 
+            Shape = (num_cams*7 + num_points*3,)
+        cam (list): A list containing camera focal length and distortion 
+            parameters. Each index of the list is the camera ID. Each entry is 
+            list with entries [f, k1, k2].
+        num_points (int): The number of 3D points being estimated
+        pts_obs (ndarray): Array containing the observed points in each image 
+            along with the camera ID and point ID of the observation. The order
+            of each entry is [cam_ID, point_ID, u, v]. Shape = (num_obs, 4).
+    Returns:
+        float: The total reprojection error
+    """
+
+    num_cams = len(cam)
+    total_reproj_error = 0
+    pts_3d = np.reshape(params[num_cams*7:], (num_points, 3))
+    # Compute the reprojection error for each camera
+    for cam_ID in range(num_cams):
+        points_in_cam = pts_obs[pts_obs[:, 0] == cam_ID, 1:]
+        # If we assume all point IDs in pts_obs are in ascending order, then we
+        # can just grab the 3d points and not worry about order
+        X_w = np.vstack((pts_3d[points_in_cam[:, 0].astype(int)].T, 
+                         np.ones((1, points_in_cam.shape[0]))))
 
         # Estimated projected points
         # Compute camera matrix
-        q = params[camID*7:camID*7+4]
+        q = params[cam_ID*7:cam_ID*7+4]
         R = quat2dcm(q)
-        t = params[camID*7+4:camID*7+7]
+        t = params[cam_ID*7+4:cam_ID*7+7]
         M = np.block([R, t.reshape((3, 1))])
-        x_homo = M @ X_w
-        x_homo = -x_homo[0:2, :]/x_homo[-1, :]
+        x_tilde = M @ X_w
+        x_tilde = -x_tilde[0:2, :]/x_tilde[-1, :]
 
 
         # x_hat = cam[camID][0] @ x_homo
-        f = cam[camID][0]
-        k1 = cam[camID][1]
-        k2 = cam[camID][2]
-        p_norm = np.linalg.norm(x_homo, axis=0)
+        f = cam[cam_ID][0]
+        k1 = cam[cam_ID][1]
+        k2 = cam[cam_ID][2]
+        p_norm = np.linalg.norm(x_tilde, axis=0)
         r = 1 + k1 * p_norm**2 + k2 * p_norm**4
-        x_hat = f*r*x_homo
+        x_hat = f*r*x_tilde
 
-        e = pointsInCam[:, 1:] - x_hat.T
+        e = points_in_cam[:, 1:] - x_hat.T
         # Add the sum of the 2-norm to the total reprojection error
-        totalReprojError += np.sum(np.linalg.norm(e, axis=1))
-    return totalReprojError
+        total_reproj_error += np.sum(np.linalg.norm(e, axis=1))
+    return total_reproj_error
 
 
-def ComputeResidual(params, cam, nPts, pts_obs):
-    # Description: Computes the total reprojection error over all points
-    # Inputs:
-    #   var     | type    | size      | descr
-    #   cam     | list    | nCams     | A list containing the camera matrices (cam[i][0] = K,  cam[i][1] = [R_i | t_i]). Each index corresponds to the camera ID
-    #   pts_3d  | ndarray | (nPts, 3) | The estimated 3d points in the World frame. Each row index corresponds to the point ID
-    #   pts_obs | ndarray | (nObs, 4) | The observed points in each camera frame. Column order = (camID, ptID, u, v)
+def ComputeResidual(params, cam, num_points, pts_obs):
+    """
+    Compute the reprojection for each observation.
+
+    Args:
+        param (ndarray): Array containing parameters that are optimized over. 
+            Shape = (num_cams*7 + num_points*3,)
+        cam (list): A list containing camera focal length and distortion 
+            parameters. Each index of the list is the camera ID. Each entry is 
+            list with entries [f, k1, k2].
+        num_points (int): The number of 3D points being estimated
+        pts_obs (ndarray): Array containing the observed points in each image 
+            along with the camera ID and point ID of the observation. The order
+            of each entry is [cam_ID, point_ID, u, v]. Shape = (num_obs, 4).
+    Returns:
+        float: The residual for each observation
+    """
     nCams = len(cam)
     nObs = pts_obs.shape[0]
-    pts_3d = np.reshape(params[nCams*7:], (nPts, 3))
+    pts_3d = np.reshape(params[nCams*7:], (num_points, 3))
     e = np.zeros((2*nObs, 1))
     for obs in range(nObs):
         camID = pts_obs[obs, 0].astype(int)
@@ -202,18 +224,21 @@ def ComputeJacobian_sparse(params, cam, nPts, pts_obs, D_damping_factor=0.1):
         # For the camera params
         qw, qx, qy, qz = q.flatten()
         # dX'/dR
-        O = np.zeros((1, 3))
-        dXp_dR = np.block([[X_prime.T, O, O], [O, X_prime.T, O], [O, O, X_prime.T]])
-        dR_dq = np.array([[0, 0, -4*qy, -4*qz], 
-                          [-2*qz, 2*qy, 2*qx, -2*qw], 
-                          [2*qy, 2*qz, 2*qw, 2*qx], 
-                          [2*qz, 2*qy, 2*qx, 2*qw], 
-                          [0, -4*qx, 0, -4*qz], 
-                          [-2*qx, -2*qw, 2*qz, 2*qy], 
-                          [-2*qy, 2*qz, -2*qw, 2*qx], 
-                          [2*qx, 2*qw, 2*qz, 2*qy], 
-                          [0, -4*qx, -4*qy, 0]])
+        # O = np.zeros((1, 3))
+        # dXp_dR = np.block([[X_prime.T, O, O], [O, X_prime.T, O], [O, O, X_prime.T]])
+        # dR_dq = np.array([[0, 0, -4*qy, -4*qz], 
+        #                   [-2*qz, 2*qy, 2*qx, -2*qw], 
+        #                   [2*qy, 2*qz, 2*qw, 2*qx], 
+        #                   [2*qz, 2*qy, 2*qx, 2*qw], 
+        #                   [0, -4*qx, 0, -4*qz], 
+        #                   [-2*qx, -2*qw, 2*qz, 2*qy], 
+        #                   [-2*qy, 2*qz, -2*qw, 2*qx], 
+        #                   [2*qx, 2*qw, 2*qz, 2*qy], 
+        #                   [0, -4*qx, -4*qy, 0]])
 
+        # v = np.array([qx, qy, qz]).reshape(3, 1)
+        # a = np.array([xp, yp, zp]).reshape(3, 1)
+        # dXp_dq2 = 2*np.block([qw*a + skew(v)@a, v.T@a*np.eye(3) + v@a.T - a@v.T - qw*skew(a)])
         # dXp_dq_numerical = GetJacobian_X_prime_q(params[camID*7:camID*7+7], X_w[0:3])
 
         dXp_dt = np.eye(3)
@@ -221,6 +246,7 @@ def ComputeJacobian_sparse(params, cam, nPts, pts_obs, D_damping_factor=0.1):
         # Just tyring this
         # J_c1[:, 1:] = -J_c1[:, 1:]
         # J_c1 = K @ dp_dxprime @ dXp_dq_numerical
+        # J_c1 = K @ dp_dxprime @ dXp_dq2
         J_c1 = GetJacobian_full_q(params[camID*7:camID*7+7], X_w[0:3], f)[0:2, :]
         J_c2 = K @ dp_dxprime @ dXp_dt
         J_c[2*row:2*row+2, camID*7:camID*7+7] = np.block([J_c1, J_c2])
@@ -233,10 +259,14 @@ def GaussNewton_sparse(res_fun, J_fun, params, cam, nPts, pts_obs, tol=1e-4, dam
     cost = np.linalg.norm(res)
     print(cost)
     nCams = len(cam)
-    while cost > tol:
+    cost_old = 1e5
+    cost_change = cost
+    while abs(cost_change) > tol:
         res = res_fun(params, cam, nPts, pts_obs)
         cost = np.linalg.norm(res)
-        print(cost)
+        cost_change = cost - cost_old
+        cost_old = cost
+        print(cost_change)
         J_c, J_x, D_inv = ComputeJacobian_sparse(params, cam, nPts, pts_obs, damping_factor)
         # D = J_x.T @ J_x
         A = J_c.T @ J_c + damping_factor*np.eye(J_c.shape[1])
@@ -260,7 +290,7 @@ def GaussNewton_sparse(res_fun, J_fun, params, cam, nPts, pts_obs, tol=1e-4, dam
 
 
 def TestJacobian(cam_params, point_w, cam):
-    point_w = np.concatenate((point_w, [1]))
+    # point_w = np.concatenate((point_w, [1]))
     f = cam[0]
     K = np.array([[f, 0, 0], [0, f, 0]])
     q = cam_params[0:4]
@@ -271,13 +301,16 @@ def TestJacobian(cam_params, point_w, cam):
     R = quat2dcm(q)
     t = cam_params[4:]
     M = np.block([R, t.reshape((3, 1))])
-    X_prime = M @ point_w.reshape((4, 1))
+    # X_prime = M @ point_w.reshape((4, 1))
+    X_prime = R @ point_w.reshape(3, 1) + t.reshape(3, 1)
     xp, yp, zp = X_prime.flatten()
 
 
     # Derivative of X_prime wrt cam_params
     O = np.zeros((1, 3))
-    dXp_dR = np.block([[X_prime.T, O, O], [O, X_prime.T, O], [O, O, X_prime.T]])
+    dXp_dR = np.array([[xp, yp, zp, 0, 0, 0, 0, 0, 0], 
+                       [0, 0, 0, xp, yp, zp, 0, 0, 0], 
+                       [0, 0, 0, 0, 0, 0, xp, yp, zp]])
     dR_dq = np.array([[0, 0, -4*qy, -4*qz], 
                       [-2*qz, 2*qy, 2*qx, -2*qw], 
                       [2*qy, 2*qz, 2*qw, 2*qx], 
@@ -289,6 +322,14 @@ def TestJacobian(cam_params, point_w, cam):
                       [0, -4*qx, -4*qy, 0]])
     dXp_dt = np.eye(3)
     dXp_dq = dXp_dR @ dR_dq
+
+    print("First Row: ")
+    print(4*qw*xp + 2*qz*yp - 2*qy*zp)
+
+    v = np.array([qx, qy, qz]).reshape(3, 1)
+    a = np.array([xp, yp, zp]).reshape(3, 1)
+    dXp_dq2 = 2*np.block([qw*a + skew(v)@a, v.T@a*np.eye(3) + v@a.T - a@v.T - qw*skew(a)])
+
     dXp_dt_numerical = GetJacobian_X_prime_t(cam_params, point_w[0:3])
     dXp_dq_numerical = GetJacobian_X_prime_q(cam_params, point_w[0:3])
 
@@ -312,8 +353,10 @@ def TestJacobian(cam_params, point_w, cam):
     print(dXp_dt)
     print("Numerical dXp_dt: ")
     print(dXp_dt_numerical)
-    print("Analytical dXp_dq: ")
+    print("Analytical dXp_dq (1): ")
     print(dXp_dq)
+    print("Analytical dXp_dq (2): ")
+    print(dXp_dq2)
     print("Numerical dXp_dq: ")
     print(dXp_dq_numerical)
     print("Analytical dXp_dX: ")
@@ -361,7 +404,7 @@ if __name__ == "__main__":
     t1 = time.time()
 
     # nCams = len(cam)
-    # TestJacobian(params[0:7], params[nCams*7:nCams*7+3], cam[0])
+    # TestJacobian(params[7:14], params[nCams*7+3:nCams*7+6], cam[1])
 
     print("done")
 
