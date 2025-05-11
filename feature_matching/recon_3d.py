@@ -19,7 +19,7 @@ from dust3r.utils.image import load_images
 from dust3r.utils.device import to_numpy
 import dill as pickle
 
-from feature_matching.feature_matching_utils import load_imgs_gray, show_imgs, visualize_sift, find_match, visualize_find_match, compute_F, visualize_epipolar_lines, compute_camera_pose, visualize_camera_poses, triangulation, visualize_camera_poses_with_pts, disambiguate_pose, visualize_camera_pose_with_pts, my_warp_perspective, visualize_img_pair, dense_match, visualize_disparity_map
+# from feature_matching.feature_matching_utils import load_imgs_gray, show_imgs, visualize_sift, find_match, visualize_find_match, compute_F, visualize_epipolar_lines, compute_camera_pose, visualize_camera_poses, triangulation, visualize_camera_poses_with_pts, disambiguate_pose, visualize_camera_pose_with_pts, my_warp_perspective, visualize_img_pair, dense_match, visualize_disparity_map
 
 
 device = 'cuda'
@@ -138,16 +138,16 @@ def get_dl_recon(path):
   img1 = cv2.imread(im_path_1)        # BGR order!
   img2 = cv2.imread(im_path_2)
 
-  print("path:", im_path_1)
-  print("path:", im_path_2)
-  print(os.path.exists(im_path_1))
-  print(os.path.exists(im_path_2))
+  # print("path:", im_path_1)
+  # print("path:", im_path_2)
+  # print(os.path.exists(im_path_1))
+  # print(os.path.exists(im_path_2))
 
-  imgs = load_imgs_gray(path, ["view_0.png", "view_1.png"])
-  show_imgs(imgs)
+  # imgs = load_imgs_gray(path, ["view_0.png", "view_1.png"])
+  # show_imgs(imgs)
 
-  im1 = imgs[0]
-  im2 = imgs[1]
+  # im1 = imgs[0]
+  # im2 = imgs[1]
 
   #x1, x2, descriptors1, descriptors2 = find_match(im1, im2, dist_thr=0.95)
   scene, pred1, pred2, view1, view2 = load_or_run(im_path_1, im_path_2)
@@ -244,6 +244,17 @@ def get_dl_recon(path):
   
   save_ply_ascii("sparse_recon_ascii.ply", X, cols)
 
+
+  mask1, mask2 = np.load("/building-mapper/segmentation/view_0.npy"), np.load("/building-mapper/segmentation/view_1.npy")
+  print("mask1.shape: ", mask1.shape)
+  lbl_sparse = np.zeros((pts1_vis.shape[0]))
+  pts1_vis_ = pts1_vis.copy().astype('uint8')
+  for i in range(pts1_vis.shape[0]): 
+    lbl_sparse[i] = mask1[pts1_vis_[i][0], pts1_vis_[i][1]]
+  print("lbl_sparse.shape:", lbl_sparse.shape)
+  print("X.shape:", X.shape)
+
+  return K1, np.eye(3), np.zeros_like(t), K2, R, t, X, cols, lbl_sparse, mask1, mask2
 
 
 def save_ply_ascii(path, xyz, rgb):
