@@ -50,7 +50,7 @@ def run_recon_all(main_dir):
 
       np.savez(save_fname, **saves)
 
-PRETRAINED_PTH = "feature_matching/HoHoNet/ckpt/mp3d_depth_HOHO_depth_dct_efficienthc_TransEn1_hardnet/ep60.pth"
+PRETRAINED_PTH = "/building-mapper/feature_matching/HoHoNet/ckpt/mp3d_depth_HOHO_depth_dct_efficienthc_TransEn1_hardnet/ep60.pth"
 
 #if not os.path.exists(PRETRAINED_PTH):
 #    os.makedirs(os.path.split(PRETRAINED_PTH)[0], exist_ok=True)
@@ -122,42 +122,78 @@ def predict_dl_pano_depth(path, viz=True):
 
   return rgb, pred_depth
 
-def reproject(rgb, pred_depth, viz=True):
-  def get_uni_sphere_xyz(H, W):
-    j, i = np.meshgrid(np.arange(H), np.arange(W), indexing='ij')
-    u = (i+0.5) / W * 2 * np.pi
-    v = ((j+0.5) / H - 0.5) * np.pi
-    z = -np.sin(v)
-    c = np.cos(v)
-    y = c * np.sin(u)
-    x = c * np.cos(u)
-    sphere_xyz = np.stack([x, y, z], -1)
-    return sphere_xyz
+def reproject(rgb, pred_depth, seg=None, viz=True):
+    def get_uni_sphere_xyz(H, W):
+        j, i = np.meshgrid(np.arange(H), np.arange(W), indexing='ij')
+        u = (i+0.5) / W * 2 * np.pi
+        v = ((j+0.5) / H - 0.5) * np.pi
+        z = -np.sin(v)
+        c = np.cos(v)
+        y = c * np.sin(u)
+        x = c * np.cos(u)
+        return np.stack([x, y, z], -1)           # (H,W,3)
 
-  d = pred_depth.squeeze().cpu().unsqueeze(-1).numpy()
-  xyz = d * get_uni_sphere_xyz(*pred_depth.shape[2:])
-  #print(xyz.shape)
-  xyzrgb = np.concatenate([xyz, rgb/255], -1)[80:-80][::2, ::2].reshape(-1, 6)
-  xyzrgb = xyzrgb[xyzrgb[:,2] < 1.5]
-  #print(xyzrgb[0])
+    d = pred_depth.squeeze().cpu().unsqueeze(-1).numpy()      # (H,W,1)
+    xyz = d * get_uni_sphere_xyz(*pred_depth.shape[2:])         # (H,W,3)
 
-  if (viz):
-    fig = go.Figure(
-        data=[
-            go.Scatter3d(
-                x=xyzrgb[:,0], y=xyzrgb[:,1], z=xyzrgb[:,2], 
+    xyzrgb_full = np.concatenate([xyz, rgb/255.0], axis=-1)     # (H,W,6)
+
+    xyzrgb_flat = xyzrgb_full[80:-80][::2, ::2].reshape(-1, 6)  # (N0,6)
+    if seg is not None:
+        seg_flat = seg[80:-80][::2, ::2].reshape(-1, 1)         # (N0,1)
+
+    keep = xyzrgb_flat[:,2] < 1.5                                # boolean mask
+    xyzrgb = xyzrgb_flat[keep]                                   # (N,6)
+    x_seg  = seg_flat[keep] if seg is not None else None         # (N,1)
+
+    if viz:
+        fig = go.Figure(
+            data=[go.Scatter3d(
+                x=xyzrgb[:,0], y=xyzrgb[:,1], z=xyzrgb[:,2],
                 mode='markers',
                 marker=dict(size=1, color=xyzrgb[:,3:]),
-            )
-        ],
-        layout=dict(
-            scene=dict(
+            )],
+            layout=dict(scene=dict(
                 xaxis=dict(visible=False, range=[-3,3]),
                 yaxis=dict(visible=False, range=[-3,3]),
                 zaxis=dict(visible=False, range=[-3,3]),
-            ),
+            ))
         )
-    )
-    fig.show()
+        fig.show()
 
-  return xyz, xyzrgb
+    return xyz, xyzrgb, x_seg
+
+def save_xyzrgb_as_ply(xyzrgb, filename="output.ply"):
+    points = xyzrgb[:, :3]
+    colors = xyzrgb[:, 3:]
+
+    # Ensure colors are in 0–1 range and float32
+    if colors.max() > 1.0:
+        colors = colors / 255.0
+    colors = colors.astype(np.float32)
+
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(points.astype(np.float32))
+    pcd.colors = o3d.utility.Vector3dVector(colors)
+    o3d.io.write_point_cloud(filename, pcd)
+
+
+
+
+
+# Example usage
+
+if __name__ == "__main__":
+  pano_path = "/building-mapper/floor_01_partial_room_01_pano_43-2.jpg"
+  SEG_PATH = "/building-mapper/segmentation/floor_01_partial_room_01_pano_43-2.npy"
+  seg_raw = np.load(SEG_PATH)                      # (H0, W0)
+  seg_resized = cv2.resize(seg_raw, (1024, 512),   # (H=512, W=1024)
+                          interpolation=cv2.INTER_NEAREST).astype(np.uint8)
+  rgb, depth = predict_dl_pano_depth(pano_path, viz=False)
+  xyz, xyzrgb, x_seg = reproject(rgb, depth, seg=seg_resized, viz=True)
+  save_xyzrgb_as_ply(xyzrgb, "reprojected.ply")
+  print("img.shape:", rgb.shape)
+  print("depth.shape:", depth.shape)
+  print("xyz.shape:", xyz.shape)
+  print("xyzrgb.shape:", xyzrgb.shape)
+  print("x_seg.shape:", x_seg.shape)
