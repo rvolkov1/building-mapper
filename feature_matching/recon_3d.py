@@ -165,31 +165,41 @@ def reproject(rgb, pred_depth, seg=None, viz=True):
 # Example usage
 
 if __name__ == "__main__":
-    pano_path = "/building-mapper/panos/floor_01_partial_room_12_pano_0.jpg"
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("pano_path", help="Path to input panorama image (.jpg)")
+    args = parser.parse_args()
+
+    pano_path = args.pano_path
     pano_name = pano_path.split("/")[-1].split('.')[0]
-    SEG_PATH = "/building-mapper/segmentation/segs/floor_01_partial_room_12_pano_0.npy"
-    seg_raw = np.load(SEG_PATH)                      # (H0, W0)
-    seg_resized = cv2.resize(seg_raw, (1024, 512),   # (H=512, W=1024)
-                          interpolation=cv2.INTER_NEAREST).astype(np.uint8)
+    SEG_PATH = f"/building-mapper/segmentation/segs/{pano_name}.npy"
+
+    seg_raw = np.load(SEG_PATH)
+    seg_resized = cv2.resize(seg_raw, (1024, 512),
+                             interpolation=cv2.INTER_NEAREST).astype(np.uint8)
+
     rgb, depth = predict_dl_pano_depth(pano_path, viz=False)
     xyz, xyzrgb, x_seg = reproject(rgb, depth, seg=seg_resized, viz=False)
+
     top_down_view(
-        xyzrgb, 
+        xyzrgb,
         x_seg,
         out_png=f"{pano_name}_top_down.png",
     )
+
     rect = top_down_border_rectangle(
-        xyzrgb, 
+        xyzrgb,
         x_seg,
-        out_png=f"{pano_name}_lean_outline.png",
-        out_npy="clean_outline.npy"
+        out_npy=f"{pano_name}_rect.npy"
     )
+
     project_openings_on_rectangle(
-        xyzrgb, 
-        x_seg, 
+        xyzrgb,
+        x_seg,
         rect,
-        door_label=2, 
+        door_label=2,
         window_label=1,
         out_png=f"{pano_name}_openings_on_rect.png",
-        out_npy="openings_on_rect.npy"
+        out_npy=f"{pano_name}_openings_on_rect.npy"
     )
