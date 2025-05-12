@@ -290,38 +290,24 @@ def FindVertices(lineList, inliers, inlierRadius=0.5):
 
         
         
-        # for j in range(i, numLines):
-        #     if j != i:
-        #         if np.all(np.isfinite(liXlj[i, j])):
-        #             allInliers = np.vstack((inliers[i],  inliers[j]))
-        #             # Calculate distance between intersection point and inliers for both lines
-        #             d = np.linalg.norm(allInliers - liXlj[i, j], axis=1)
-        #             numInliers[j] = np.sum(d <= inlierRadius)
-        #             d_i = np.linalg.norm(inliers[i] - liXlj[i, j], axis=1)
-        #             d_j = np.linalg.norm(inliers[j] - liXlj[i, j], axis=1)
-        #             inliers_i = np.sum(d_i <= inlierRadius)/inliers[i].size
-        #             inliers_j = np.sum(d_j <= inlierRadius)/inliers[j].size
-        #             numInliers[j] = 0.5*inliers_i + 0.5*inliers_j
-        #         else:
-        #             numInliers[j] = -1
 
-                # fig, ax = plt.subplots()
-                # ax.scatter(allInliers[:, 0], allInliers[:, 1], c='k')
-                # ax.scatter(liXlj[i, j, 0], liXlj[i, j, 1], c='g')
-                #
-                # xFit = np.array([np.min(allInliers[:, 0]), np.max(allInliers[:, 0])])
-                # yFit = -(lineList[i][0]*xFit + lineList[i][2])/lineList[i][1]
-                # yFit2 = -(lineList[j][0]*xFit + lineList[j][2])/lineList[j][1]
-                # circle = ptc.Circle(liXlj[i,j], inlierRadius)
-                # circle.set_fill(False)
-                # ax.add_artist(circle)
-                # ax.plot(xFit, yFit, c='b', ls='-')
-                # ax.plot(xFit, yFit2, c='b', ls='-')
-                # pad = 1
-                # ax.set_xlim((np.min(allInliers[:, 0]) - pad, np.max(allInliers[:, 0]) + pad))
-                # ax.set_ylim((np.min(allInliers[:, 1]) - pad, np.max(allInliers[:, 1]) + pad))
-                # print(numInliers[j])
-                # plt.show()
+            # fig, ax = plt.subplots()
+            # ax.scatter(allInliers[:, 0], allInliers[:, 1], c='k')
+            # ax.scatter(liXlj[i, j, 0], liXlj[i, j, 1], c='g')
+            #
+            # xFit = np.array([np.min(allInliers[:, 0]), np.max(allInliers[:, 0])])
+            # yFit = -(lineList[i][0]*xFit + lineList[i][2])/lineList[i][1]
+            # yFit2 = -(lineList[j][0]*xFit + lineList[j][2])/lineList[j][1]
+            # circle = ptc.Circle(liXlj[i,j], inlierRadius)
+            # circle.set_fill(False)
+            # ax.add_artist(circle)
+            # ax.plot(xFit, yFit, c='b', ls='-')
+            # ax.plot(xFit, yFit2, c='b', ls='-')
+            # pad = 1
+            # ax.set_xlim((np.min(allInliers[:, 0]) - pad, np.max(allInliers[:, 0]) + pad))
+            # ax.set_ylim((np.min(allInliers[:, 1]) - pad, np.max(allInliers[:, 1]) + pad))
+            # print(numInliers[j])
+            # plt.show()
 
 
 
@@ -387,7 +373,7 @@ if __name__ == "__main__":
     # ax.set_ylim((np.min(noisyPts[:, 1]) - pad, np.max(noisyPts[:, 1]) + pad))
 
     # l, cost, inliers = FitMultipleLines(noisyPts, thr_d=0.4, beta=2)
-    l, cost, inliers = FitMultipleLines(noisyPts, thr_d=0.05, beta=2)
+    l, cost, inliers = FitMultipleLines(noisyPts, thr_d=0.05, beta=3)
     img_raw = MakeGrayscale(noisyPts)
     img = cv2.GaussianBlur(img_raw, (3, 3), 0)
 
@@ -406,7 +392,7 @@ if __name__ == "__main__":
     # img[dst>0.1*dst.max()]=255
     # cv2.imshow('dst',img)
 
-    vertex_ids, vertex_points = FindVertices(l, inliers)
+    vertex_ids, vertex_points = FindVertices(l, inliers, inlierRadius=0.1)
 
     fig, ax = plt.subplots()
     ax.scatter(truthPts[:,0], truthPts[:,1], c='k', label="Truth Points")
