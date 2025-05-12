@@ -3,6 +3,8 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as ptc
 from scipy.spatial import ConvexHull
 import cv2
+from itertools import combinations
+
 
 def GenerateFloorplan(planNum, N=10, sigma=1, rngSeed=None):
     if planNum == 1:
@@ -74,6 +76,13 @@ def GetLinePts(l, x_lim, y_lim):
     # Choose the coefficient that captures the most of x_lim or y_lim
     lbda_min = np.min(( (x_lim[0] - l[0][0])/l[1][0], (y_lim[0] - l[0][1])/l[1][1] ))
     lbda_max = np.max(( (x_lim[1] - l[0][0])/l[1][0], (y_lim[1] - l[0][1])/l[1][1] ))
+    if abs(l[1][1]) < 1e-9:
+        lbda_min = (x_lim[0] - l[0][0])/l[1][0]
+        lbda_max = (x_lim[1] - l[0][0])/l[1][0]
+    elif abs(l[1][0]) < 1e-9:
+        lbda_min = (y_lim[0] - l[0][1])/l[1][1]
+        lbda_max = (y_lim[1] - l[0][1])/l[1][1]
+
     lbda = np.array([lbda_min, lbda_max]).reshape(1, 2)
     r = l[0] + l[1] @ lbda
     return r[0], r[1]
@@ -99,6 +108,25 @@ def FitLine_ransac(pts, thr_d=0.8, maxIter=10000, alpha=1, beta=1):
         l = GetLine(pt1, pt2)
         d = CalculateDistFromLine(l, pts.T)
         num_inliers = np.sum(np.abs(d) <= thr_d)
+
+
+        # x_lim = np.array([np.min(pts[:, 0]), np.max(pts[:, 0])])
+        # y_lim = np.array([np.min(pts[:, 1]), np.max(pts[:, 1])])
+        # x, y = GetLinePts(l, x_lim, y_lim)
+        # fig, ax = plt.subplots()
+        # ax.scatter(pts[:, 0], pts[:, 1], c="r")
+        # ax.scatter(pts[np.abs(d) <= thr_d, 0], pts[np.abs(d) <= thr_d, 1], c="g")
+        # ax.plot(x, y, c="g", ls="-")
+        # pad = 1
+        # ax.set_xlim((np.min(pts[:, 0]) - pad, np.max(pts[:, 0]) + pad))
+        # ax.set_ylim((np.min(pts[:, 1]) - pad, np.max(pts[:, 1]) + pad))
+        # ax.set_aspect('equal', adjustable='box')
+        # # ax[1].set_aspect('equal')
+        #
+        # # ax[2].hist(ptsRotated[:, 0], bins=nBins)[0]
+        # plt.show()
+
+
         U = CalculateUniformity(l, pts)
         obj_fun = alpha*num_inliers/N + beta*U
         if obj_fun > val_to_max:
@@ -113,12 +141,13 @@ def FitLine_ransac(pts, thr_d=0.8, maxIter=10000, alpha=1, beta=1):
         
 def CalculateUniformity(l, pts, thr_d=0.8, showOutput=False):
     # Check for how the inliers are distributed along the line l
-    d = CalculateDistFromLine(l, pts.reshape(2, -1))
+    # d = CalculateDistFromLine(l, pts.reshape(2, -1))
+    d = CalculateDistFromLine(l, pts.T)
 
     inlier_selection = d <= thr_d
     ptsInliers = pts[inlier_selection, :]
     lineAngle = np.atan2(l[1][1], l[1][0])[0]
-    rotationAngle = lineAngle - np.pi/2
+    rotationAngle = lineAngle
     ct = np.cos(rotationAngle)
     st = np.sin(rotationAngle)
     DCM = np.array([[ct, st], [-st, ct]])
@@ -133,6 +162,8 @@ def CalculateUniformity(l, pts, thr_d=0.8, showOutput=False):
     y_c = np.sum(ptsRotated[:, 1])/numInliers
     ptsRotated[:, 0] -= x_c
     ptsRotated[:, 1] -= y_c
+    l_rotated[0][0] -= x_c
+    l_rotated[0][1] -= y_c
 
     # Calculate the moment of inertia
     Ixx = np.sum(ptsRotated[:, 1]**2)/numInliers
@@ -143,7 +174,8 @@ def CalculateUniformity(l, pts, thr_d=0.8, showOutput=False):
     nBins = 10
     h = np.histogram(ptsRotated[:, 0], bins=nBins)[0]
     E = numInliers/nBins
-    U = 1 - np.sum((h - E)**2)/(numInliers - E)**2
+    # The 0.9 is totally empirical
+    U = 1 - np.sum((h - E)**2)/(numInliers - E)**2 - 0.9
 
     if showOutput == True:
         momentText = f"Ixx = {Ixx}, Iyy = {Iyy}, Ixy = {Ixy}"
@@ -203,13 +235,14 @@ def FitMultipleLines(pts, thr_d=0.8, alpha=1, beta=1, minOutlierFrac=0.1):
     return l, obj_fun, inlierPts
 
 
-def FindVertices(lineList, inliers, inlierRadius=1):
+def FindVertices(lineList, inliers, inlierRadius=0.5):
     # Each line should have two end points, therefore we look for two "real" intersections between each line element.
     # There would have to be some consistency check, as lines that don't correspond to corners may intersect at further away points.
 
     # Compute intersections
     numLines = len(lineList)
     liXlj = np.zeros((numLines, numLines, 2))
+    points_found = []
     for i, li in enumerate(lineList):
         for j, lj in enumerate(lineList):
             a1 = li[0]
@@ -219,32 +252,58 @@ def FindVertices(lineList, inliers, inlierRadius=1):
             num = Cross2(b1, a1 - a2)
             den = Cross2(b1, b2)
             if np.abs(den) < 1e-9:
-                liXlj[i, j] = np.array([np.nan, np.nan])
+                liXlj[i, j] = np.array([np.inf, np.inf])
+                points_found.append([np.inf, np.inf])
             else:
                 lbda = num/den
                 liXlj[i, j] = (a2 + lbda*b2).flatten()
+                points_found.append((a2 + lbda*b2).flatten().tolist())
 
+    unique_pts = np.unique(points_found, axis=0)
 
-    print(liXlj)
+    # Stores the index of the corresponding point in unique_pts for each line
+    vertex_candidates = np.zeros(len(points_found), dtype=int)
+    for i in range(unique_pts.shape[0]):
+        for j in range(len(points_found)):
+            if np.allclose(unique_pts[i], points_found[j], equal_nan=True):
+                vertex_candidates[j] = i
+    vertex_candidates = vertex_candidates.reshape(numLines, numLines)
+
 
     # Find the best endpoints for each line (closest to their inliers)
-    bestEndpoints = np.zeros((numLines, 2, 2))
+    bestEndpoints = np.zeros((numLines, 2), dtype=int)
     for i in range(numLines):
-        numInliers = np.zeros(numLines)
-        for j in range(i, numLines):
-            if j != i:
-                if np.all(np.isfinite(liXlj[i, j])):
-                    allInliers = np.vstack((inliers[i],  inliers[j]))
-                    # Calculate distance between intersection point and inliers for both lines
-                    d = np.linalg.norm(allInliers - liXlj[i, j], axis=1)
-                    numInliers[j] = np.sum(d <= inlierRadius)
-                    d_i = np.linalg.norm(inliers[i] - liXlj[i, j], axis=1)
-                    d_j = np.linalg.norm(inliers[j] - liXlj[i, j], axis=1)
-                    inliers_i = np.sum(d_i <= inlierRadius)/inliers[i].size
-                    inliers_j = np.sum(d_j <= inlierRadius)/inliers[j].size
-                    numInliers[j] = 0.5*inliers_i + 0.5*inliers_j
-                else:
-                    numInliers[j] = 0
+        vertex_candidates_i = vertex_candidates[i]
+        vertex_candidates_i = vertex_candidates_i[np.all(np.isfinite(unique_pts[vertex_candidates_i]), axis=1)]
+        num_inliers = []
+        endpoint_ids = []
+        # See how good of a fit every pair in the list is
+        for point_pair in combinations(vertex_candidates_i, 2):
+            p0 = unique_pts[point_pair[0]]
+            p1 = unique_pts[point_pair[1]]
+            d0 = np.linalg.norm(inliers[i] - p0, axis=1)
+            d1 = np.linalg.norm(inliers[i] - p1, axis=1)
+            num_inliers.append(np.sum(d0 <= inlierRadius) + np.sum(d1 <= inlierRadius))
+            endpoint_ids.append(point_pair)
+        best_pair_idx = np.argmax(num_inliers)
+        bestEndpoints[i] = endpoint_ids[best_pair_idx]
+
+        
+        
+        # for j in range(i, numLines):
+        #     if j != i:
+        #         if np.all(np.isfinite(liXlj[i, j])):
+        #             allInliers = np.vstack((inliers[i],  inliers[j]))
+        #             # Calculate distance between intersection point and inliers for both lines
+        #             d = np.linalg.norm(allInliers - liXlj[i, j], axis=1)
+        #             numInliers[j] = np.sum(d <= inlierRadius)
+        #             d_i = np.linalg.norm(inliers[i] - liXlj[i, j], axis=1)
+        #             d_j = np.linalg.norm(inliers[j] - liXlj[i, j], axis=1)
+        #             inliers_i = np.sum(d_i <= inlierRadius)/inliers[i].size
+        #             inliers_j = np.sum(d_j <= inlierRadius)/inliers[j].size
+        #             numInliers[j] = 0.5*inliers_i + 0.5*inliers_j
+        #         else:
+        #             numInliers[j] = -1
 
                 # fig, ax = plt.subplots()
                 # ax.scatter(allInliers[:, 0], allInliers[:, 1], c='k')
@@ -268,10 +327,10 @@ def FindVertices(lineList, inliers, inlierRadius=1):
 
 
         # The two points with the most inliers will be the ends of this segment
-        minIdx = np.argpartition(numInliers, -2)[-2:]
-        bestEndpoints[i, 0] = liXlj[i, minIdx[0]]
-        bestEndpoints[i, 1] = liXlj[i, minIdx[1]]
-    return bestEndpoints
+        # minIdx = np.argpartition(numInliers, -2)[-2:]
+        # bestEndpoints[i, 0] = liXlj[i, minIdx[0]]
+        # bestEndpoints[i, 1] = liXlj[i, minIdx[1]]
+    return bestEndpoints, unique_pts
 
 
 def AdjustVertices(corners, pts, sigma):
@@ -324,7 +383,7 @@ if __name__ == "__main__":
     # ax.set_xlim((np.min(noisyPts[:, 0]) - pad, np.max(noisyPts[:, 0]) + pad))
     # ax.set_ylim((np.min(noisyPts[:, 1]) - pad, np.max(noisyPts[:, 1]) + pad))
 
-    l, cost, inliers = FitMultipleLines(noisyPts, thr_d=0.4)
+    l, cost, inliers = FitMultipleLines(noisyPts, thr_d=0.4, beta=2)
     img_raw = MakeGrayscale(noisyPts)
     img = cv2.GaussianBlur(img_raw, (3, 3), 0)
 
@@ -343,8 +402,7 @@ if __name__ == "__main__":
     # img[dst>0.1*dst.max()]=255
     # cv2.imshow('dst',img)
 
-    vertices = FindVertices(l, inliers)
-    print(vertices)
+    vertex_ids, vertex_points = FindVertices(l, inliers)
 
     fig, ax = plt.subplots()
     ax.scatter(truthPts[:,0], truthPts[:,1], c='k', label="Truth Points")
@@ -355,8 +413,8 @@ if __name__ == "__main__":
         x_line, y_line = GetLinePts(l[i], x_lim, y_lim)
         ax.scatter(inliers[i][:, 0], inliers[i][:, 1], c='g')
         ax.plot(x_line, y_line, c='b', ls='-', label="Fitted Lines"*(i==1))
-        ax.scatter(vertices[i, 0, 0], vertices[i, 0, 1], c='b')
-        ax.scatter(vertices[i, 1, 0], vertices[i, 1, 1], c='b')
+        ax.scatter(vertex_points[vertex_ids[i, 0]][0], vertex_points[vertex_ids[i, 0]][1], c='b')
+        ax.scatter(vertex_points[vertex_ids[i, 1]][0], vertex_points[vertex_ids[i, 1]][1], c='b')
         pad = 1
         ax.set_xlim((np.min(noisyPts[:, 0]) - pad, np.max(noisyPts[:, 0]) + pad))
         ax.set_ylim((np.min(noisyPts[:, 1]) - pad, np.max(noisyPts[:, 1]) + pad))
@@ -365,15 +423,15 @@ if __name__ == "__main__":
     ax.set_ylabel("Y")
     ax.legend()
 
-    hull = ConvexHull(noisyPts)
-    fig2, ax2 = plt.subplots()
-    ax2.scatter(truthPts[:,0], truthPts[:,1], c='k', label="Truth Points")
-    ax2.scatter(noisyPts[:,0], noisyPts[:,1], c='r', label="Noisy Points")
-    for simplex in hull.simplices:
-        plt.plot(noisyPts[simplex, 0], noisyPts[simplex, 1], 'k-')
-
-    fig3, ax3 = plt.subplots()
-    ax3.imshow(img)
+    # hull = ConvexHull(noisyPts)
+    # fig2, ax2 = plt.subplots()
+    # ax2.scatter(truthPts[:,0], truthPts[:,1], c='k', label="Truth Points")
+    # ax2.scatter(noisyPts[:,0], noisyPts[:,1], c='r', label="Noisy Points")
+    # for simplex in hull.simplices:
+    #     plt.plot(noisyPts[simplex, 0], noisyPts[simplex, 1], 'k-')
+    #
+    # fig3, ax3 = plt.subplots()
+    # ax3.imshow(img)
 
 
 
