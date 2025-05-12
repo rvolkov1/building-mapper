@@ -1,0 +1,6 @@
+[submodule "mast3r"]
+	path = mast3r
+	url = https://github.com/naver/mast3r
+[submodule "feature_matching/HoHoNet"]
+	path = feature_matching/HoHoNet
+	url = https://github.com/sunset1995/HoHoNet.git

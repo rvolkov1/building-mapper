@@ -19,6 +19,7 @@ def analyze_panoramas(dataset_dir):
     panos_dir = os.path.join(dataset_dir, 'panos')
     
     if not os.path.exists(panos_dir):
+        print("path does not exist")
         return {}, {}
     
     # Dictionary to store room counts and files

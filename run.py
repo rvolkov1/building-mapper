@@ -1,6 +1,9 @@
-from feature_matching.feature_match import get_3d_pt_cloud, all_opencv
+import os 
+from feature_matching.recon_3d import run_recon_all
+
+## replace main_dir with the path to your dataset. Should be same dataset as you used with Pouya's script
 
 if __name__ == "__main__":
-  path = "/home/james/Documents/building-mapper/dataset_utils/zind_subset/0528/2d_views/room 01/corres_0"
-  get_3d_pt_cloud(path)
-  #all_opencv(path)
+  main_dir = "zind_subset"
+
+  run_recon_all(main_dir)
