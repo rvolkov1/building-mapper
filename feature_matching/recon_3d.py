@@ -12,13 +12,9 @@ import open3d as o3d
 import plotly.graph_objects as go
 
 from feature_matching.HoHoNet.lib.config import config
-from feature_matching.top_down_view import top_down_border
+from feature_matching.top_down_view import top_down_view, top_down_border_rectangle, project_openings_on_rectangle
 
 from pathlib import Path
-
-import matplotlib.pyplot as plt
-import numpy as np
-from tqdm import tqdm
 
 def run_recon_all(main_dir):
   def is_4_digit_number(name):
@@ -164,58 +160,36 @@ def reproject(rgb, pred_depth, seg=None, viz=True):
 
     return xyz, xyzrgb, x_seg
 
-def save_xyzrgb_as_ply(xyzrgb, filename="output.ply"):
-    points = xyzrgb[:, :3]
-    colors = xyzrgb[:, 3:]
 
-    # Ensure colors are in 0–1 range and float32
-    if colors.max() > 1.0:
-        colors = colors / 255.0
-    colors = colors.astype(np.float32)
-
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(points.astype(np.float32))
-    pcd.colors = o3d.utility.Vector3dVector(colors)
-    o3d.io.write_point_cloud(filename, pcd)
-
-
-
-def top_down_view(xyz, x_seg, out_png=None):
-    keep   = x_seg[:,0] != 0
-    pts    = xyz[keep]
-    labels = x_seg[keep,0]
-
-    cmap   = {1:"red", 2:"green", 3:"blue"}
-    colours = [cmap.get(int(l), "gray") for l in labels]
-
-    fig, ax = plt.subplots(figsize=(6,6))
-    ax.scatter(pts[:,0], pts[:,1], s=1, c=colours)
-    ax.set_aspect("equal")
-    ax.set_xlabel("x (m)")
-    ax.set_ylabel("y (m)")
-    ax.set_title("Top‑down semantic view")
-    ax.invert_yaxis()
-    plt.tight_layout()
-
-    if out_png:
-        fig.savefig(out_png, dpi=300, bbox_inches="tight")
-    plt.show()
 
 # Example usage
 
 if __name__ == "__main__":
-  pano_path = "/building-mapper/floor_01_partial_room_01_pano_43-2.jpg"
-  SEG_PATH = "/building-mapper/segmentation/floor_01_partial_room_01_pano_43-2.npy"
-  seg_raw = np.load(SEG_PATH)                      # (H0, W0)
-  seg_resized = cv2.resize(seg_raw, (1024, 512),   # (H=512, W=1024)
+    pano_path = "/building-mapper/panos/floor_01_partial_room_12_pano_0.jpg"
+    pano_name = pano_path.split("/")[-1].split('.')[0]
+    SEG_PATH = "/building-mapper/segmentation/segs/floor_01_partial_room_12_pano_0.npy"
+    seg_raw = np.load(SEG_PATH)                      # (H0, W0)
+    seg_resized = cv2.resize(seg_raw, (1024, 512),   # (H=512, W=1024)
                           interpolation=cv2.INTER_NEAREST).astype(np.uint8)
-  rgb, depth = predict_dl_pano_depth(pano_path, viz=False)
-  xyz, xyzrgb, x_seg = reproject(rgb, depth, seg=seg_resized, viz=False)
-  save_xyzrgb_as_ply(xyzrgb, "reprojected.ply")
-  print("img.shape:", rgb.shape)
-  print("depth.shape:", depth.shape)
-  print("xyz.shape:", xyz.shape)
-  print("xyzrgb.shape:", xyzrgb.shape)
-  print("x_seg.shape:", x_seg.shape)
-  top_down_border(xyzrgb, x_seg, out_png="top_down_semantic.png")
-  
+    rgb, depth = predict_dl_pano_depth(pano_path, viz=False)
+    xyz, xyzrgb, x_seg = reproject(rgb, depth, seg=seg_resized, viz=False)
+    top_down_view(
+        xyzrgb, 
+        x_seg,
+        out_png=f"{pano_name}_top_down.png",
+    )
+    rect = top_down_border_rectangle(
+        xyzrgb, 
+        x_seg,
+        out_png=f"{pano_name}_lean_outline.png",
+        out_npy="clean_outline.npy"
+    )
+    project_openings_on_rectangle(
+        xyzrgb, 
+        x_seg, 
+        rect,
+        door_label=2, 
+        window_label=1,
+        out_png=f"{pano_name}_openings_on_rect.png",
+        out_npy="openings_on_rect.npy"
+    )
