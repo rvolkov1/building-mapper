@@ -368,6 +368,9 @@ def MakeGrayscale(pts, scale=5):
 
 if __name__ == "__main__":
     truthPts, noisyPts = GenerateFloorplan(3, N=100, sigma=0.2)
+    
+    border_points = np.load("border_points.npy")
+    noisyPts = border_points[border_points[:, -1] == 3, 0:2]
 
     # l, cost, inliers = FitLine_ransac(noisyPts, alpha=1, beta=1, thr_d=0.3)
     #
@@ -383,7 +386,8 @@ if __name__ == "__main__":
     # ax.set_xlim((np.min(noisyPts[:, 0]) - pad, np.max(noisyPts[:, 0]) + pad))
     # ax.set_ylim((np.min(noisyPts[:, 1]) - pad, np.max(noisyPts[:, 1]) + pad))
 
-    l, cost, inliers = FitMultipleLines(noisyPts, thr_d=0.4, beta=2)
+    # l, cost, inliers = FitMultipleLines(noisyPts, thr_d=0.4, beta=2)
+    l, cost, inliers = FitMultipleLines(noisyPts, thr_d=0.05, beta=2)
     img_raw = MakeGrayscale(noisyPts)
     img = cv2.GaussianBlur(img_raw, (3, 3), 0)
 
