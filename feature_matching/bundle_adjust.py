@@ -256,17 +256,19 @@ def ComputeJacobian_sparse(params, cam, nPts, pts_obs, D_damping_factor=0.1):
 def GaussNewton_sparse(res_fun, J_fun, params, cam, nPts, pts_obs, tol=1e-4, damping_factor=0.1):
     # Compute the initial cost
     res = res_fun(params, cam, nPts, pts_obs)
-    cost = np.linalg.norm(res)
-    print(cost)
+    reproj_error = np.linalg.norm(res)
+    # I know this is a mess.
     nCams = len(cam)
-    cost_old = 1e5
-    cost_change = cost
-    while abs(cost_change) > tol:
+    reproj_old = 1e5
+    reproj_change = reproj_error
+    res_list = []
+    while abs(reproj_change) > tol:
         res = res_fun(params, cam, nPts, pts_obs)
-        cost = np.linalg.norm(res)
-        cost_change = cost - cost_old
-        cost_old = cost
-        print(cost_change)
+        reproj_error = np.sum(np.linalg.norm(res.reshape(2, -1, order="f"), axis=0))
+        res_list.append(reproj_error)
+        reproj_change = reproj_error - reproj_old
+        reproj_old = reproj_error
+        print(reproj_error)
         J_c, J_x, D_inv = ComputeJacobian_sparse(params, cam, nPts, pts_obs, damping_factor)
         # D = J_x.T @ J_x
         A = J_c.T @ J_c + damping_factor*np.eye(J_c.shape[1])
@@ -286,7 +288,7 @@ def GaussNewton_sparse(res_fun, J_fun, params, cam, nPts, pts_obs, tol=1e-4, dam
             params[i*7:i*7+4] = params[i*7:i*7+4]/np.linalg.norm(params[i*7:i*7+4])
 
         
-    return params, res
+    return params, res_list
 
 
 def TestJacobian(cam_params, point_w, cam):
@@ -406,5 +408,5 @@ if __name__ == "__main__":
     # nCams = len(cam)
     # TestJacobian(params[7:14], params[nCams*7+3:nCams*7+6], cam[1])
 
-    print("done")
+    print(res)
 
