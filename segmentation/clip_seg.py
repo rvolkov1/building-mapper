@@ -80,7 +80,7 @@ def main(image_path, weights_path="clipseg/weights/rd64-uni.pth",
          out_dir="outputs", threshold=0.5, device="cpu"):
 
     out_dir = Path(out_dir)
-    out_dir.mkdir(exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     model = load_model(weights_path, device)
     img, size, name = read_image(image_path)
@@ -110,13 +110,24 @@ def main(image_path, weights_path="clipseg/weights/rd64-uni.pth",
 
     cv2.imwrite(str(out_dir / f"{name}_mask.png"), color_mask[:, :, ::-1])
 
-
+import argparse
+# ---- entry point with recursive directory traversal ----
 if __name__ == "__main__":
-    import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("image")
+    parser.add_argument("--pano_root", required=True, help="Root directory of pano folders (e.g., panos/)")
     parser.add_argument("--weights", default="clipseg/weights/rd64-uni.pth")
-    parser.add_argument("--out_dir", default="segs")
+    parser.add_argument("--out_root", default="segs", help="Root directory to store segmentations")
     parser.add_argument("--threshold", type=float, default=0.5)
     args = parser.parse_args()
-    main(args.image, args.weights, out_dir=args.out_dir, threshold=args.threshold)
+
+    pano_root = Path(args.pano_root)
+    out_root = Path(args.out_root)
+
+    for subfolder in sorted(pano_root.iterdir()):
+        if subfolder.is_dir():
+            out_dir = out_root / subfolder.name
+            out_dir.mkdir(parents=True, exist_ok=True)
+
+            for img_path in sorted(subfolder.glob("*.jpg")):
+                print(f"Processing: {img_path}")
+                main(str(img_path), args.weights, out_dir=str(out_dir), threshold=args.threshold)

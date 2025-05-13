@@ -11,7 +11,7 @@ def top_down_view(xyz, x_seg, out_png=None):
     cmap = {0: "yellow", 1: "red", 2: "green", 3: "blue"}
     colours = [cmap.get(int(l), "gray") for l in labels]
 
-    fig, ax = plt.subplots(figsize=(6, 6))
+    fig, ax = plt.subplots(figsize=(8, 4))
     ax.scatter(pts[:, 0], pts[:, 1], s=1, c=colours)
     ax.set_aspect("equal")
     ax.set_xlabel("x (m)")
@@ -34,28 +34,43 @@ def top_down_view(xyz, x_seg, out_png=None):
         fig.savefig(out_png, dpi=300, bbox_inches="tight")
     plt.show()
 
-def top_down_border_rectangle(
+import numpy as np
+import matplotlib.pyplot as plt
+from shapely.geometry import Polygon
+from shapely.ops import unary_union
+
+
+def top_down_border_min_rect(
         xyz, x_seg,
         keep_labels=(1, 2, 3),
         x_step=0.5,
         smooth_window=5,
         gap_bins=5,
-        p_lo=5, p_hi=95,
+        keep_ratio=0.95,         # keep this fraction of *nearest* outline pts
         out_png=None,
-        out_npy=None
+        out_npy=None,
     ):
-    keep_mask = np.isin(x_seg[:, 0], keep_labels)
-    pts_xy = xyz[keep_mask, :2]
+    """
+    Fit a minimum‑area rotated rectangle that encloses the central
+    *keep_ratio* fraction of the smoothed outline points.
+
+    keep_ratio = 1.0 → original behaviour (no trimming)
+    keep_ratio < 1.0 → trims radial outliers before rectangle fitting
+    """
+
+    # ---------------------------------------------------------------- STEP 1 – collect outline (unchanged)
+    keep = np.isin(x_seg[:, 0], keep_labels)
+    pts_xy = xyz[keep, :2]
     if pts_xy.size == 0:
-        raise ValueError("No points left")
+        raise ValueError("No points left after label filtering")
 
     x_vals = pts_xy[:, 0]
     bins = np.arange(x_vals.min(), x_vals.max() + x_step, x_step)
     idx_pts = np.digitize(x_vals, bins)
 
-    y_lo = np.full(len(bins), np.inf)
+    y_lo = np.full(len(bins),  np.inf)
     y_hi = np.full(len(bins), -np.inf)
-    for idx, (x, y) in zip(idx_pts, pts_xy):
+    for idx, (_, y) in zip(idx_pts, pts_xy):
         y_lo[idx] = min(y_lo[idx], y)
         y_hi[idx] = max(y_hi[idx], y)
 
@@ -67,16 +82,19 @@ def top_down_border_rectangle(
         while end < len(bins) and not valid[end]:
             end += 1
         gap = end - start
-        if start > 0 and end < len(bins) and gap <= gap_bins and valid[start - 1] and valid[end]:
+        if (
+            start > 0 and end < len(bins) and gap <= gap_bins
+            and valid[start - 1] and valid[end]
+        ):
             y_lo[start:end] = np.linspace(y_lo[start - 1], y_lo[end], gap + 2)[1:-1]
             y_hi[start:end] = np.linspace(y_hi[start - 1], y_hi[end], gap + 2)[1:-1]
             valid[start:end] = True
 
     idx = np.flatnonzero(valid)
     x_cent = bins[idx] + x_step / 2
-    y_lo = y_lo[idx]
-    y_hi = y_hi[idx]
+    y_lo, y_hi = y_lo[idx], y_hi[idx]
 
+    # smooth
     if smooth_window >= 3 and smooth_window % 2 == 1:
         k = np.ones(smooth_window) / smooth_window
         pad = smooth_window // 2
@@ -85,36 +103,50 @@ def top_down_border_rectangle(
 
     lower = np.column_stack([x_cent, y_lo])
     upper = np.column_stack([x_cent, y_hi])
-    outline = np.vstack([lower, upper[::-1]])
+    outline = np.vstack([lower, upper[::-1]])          # (N,2)
 
-    x_min, x_max = np.percentile(outline[:, 0], [p_lo, p_hi])
-    y_min, y_max = np.percentile(outline[:, 1], [p_lo, p_hi])
+    # ---------------------------------------------------------------- STEP 2 – radial trimming
+    if keep_ratio < 1.0:
+        centroid = outline.mean(axis=0)
+        dists = np.linalg.norm(outline - centroid, axis=1)
+        thresh = np.quantile(dists, keep_ratio)
+        outline_trim = outline[dists <= thresh]
+        if len(outline_trim) >= 4:
+            outline = outline_trim
+        # else: too few points left, fall back to all points
 
-    rect = np.array([
-        [x_min, y_min],
-        [x_max, y_min],
-        [x_max, y_max],
-        [x_min, y_max],
-        [x_min, y_min],
-    ])
+    # ---------------------------------------------------------------- STEP 3 – minimum‑area rectangle
+    poly_outline = Polygon(outline).convex_hull
+    min_rect_poly = poly_outline.minimum_rotated_rectangle
+    rect_coords = np.array(min_rect_poly.exterior.coords[:-1])  # (4,2)
 
-    fig, ax = plt.subplots(figsize=(6, 6))
-    ax.plot(*outline.T, color="lightgray", linewidth=0.8)
-    ax.plot(*rect.T, "-k", linewidth=2)
+    # sort vertices clockwise
+    centroid = rect_coords.mean(axis=0)
+    angles = np.arctan2(rect_coords[:, 1] - centroid[1],
+                        rect_coords[:, 0] - centroid[0])
+    rect_sorted = rect_coords[np.argsort(angles)]
+
+    rect_closed = np.vstack([rect_sorted, rect_sorted[0]])
+
+    # ---------------------------------------------------------------- STEP 4 – visualise
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.plot(*outline.T, color="lightgray", lw=0.8, label="trimmed outline")
+    ax.plot(*rect_closed.T, "-k", lw=2, label="min‑area rectangle")
     ax.set_aspect("equal")
     ax.invert_yaxis()
     ax.set_xlabel("x")
     ax.set_ylabel("y")
-    ax.set_title("Top-down view")
+    ax.set_title(f"keep_ratio = {keep_ratio} → oriented min‑area rectangle")
+    ax.legend()
     plt.tight_layout()
 
     if out_png:
         fig.savefig(out_png, dpi=300, bbox_inches="tight")
     if out_npy:
-        np.save(out_npy, rect[:-1])
+        np.save(out_npy, rect_sorted)
 
     plt.show()
-    return rect[:-1]
+    return rect_sorted
 
 
 def project_openings_on_rectangle(
@@ -170,7 +202,7 @@ def project_openings_on_rectangle(
     proj_windows = np.array(proj_windows) if proj_windows else np.empty((0, 2))
 
     # ----------------------------------------------------------- STEP 2  plot
-    fig, ax = plt.subplots(figsize=(6, 6))
+    fig, ax = plt.subplots(figsize=(8, 4))
 
     # rectangle outline
     rect_closed = np.vstack([rect, rect[0]])
@@ -188,7 +220,7 @@ def project_openings_on_rectangle(
     ax.invert_yaxis()
     ax.set_xlabel("x (m)")
     ax.set_ylabel("y (m)")
-    ax.set_title("Doors (green) & windows (red) snapped to rectangle")
+    ax.set_title("Doors & windows projected to rectangle")
     ax.legend(loc="lower left")
     plt.tight_layout()
 
